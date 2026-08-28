@@ -91,8 +91,8 @@ users on the host.
 |---|---|---|---|
 | `berm.file.<name>.from` | ref | the default source's whole payload, when that source is binary | What to deliver into the file. |
 | `berm.file.<name>.path` | absolute path | `/run/berm/<name>` | The tmpfs-backed target. Deliberately not `/run/secrets/<name>`, to avoid shadowing compose's own secrets mounts. |
-| `berm.file.<name>.owner` | `uid[:gid]` | the container's configured user, else `0:0` | Numeric only, no names. |
-| `berm.file.<name>.mode` | octal string | `defaults.mode` in `berm.yml`, else `0400` | Three or four octal digits (`"0400"`, `"440"`). |
+| `berm.file.<name>.owner` | `uid[:gid]` | `berm.owner`, else the container's configured user, else `0:0` | Numeric only, no names. |
+| `berm.file.<name>.mode` | octal string | `berm.mode`, else `defaults.mode` in `berm.yml`, else `0400` | Three or four octal digits (`"0400"`, `"440"`). |
 
 `<name>` is a delivery label of your choosing. It may itself contain dots (the
 final segment is the attribute), but not a `/`. The recognized attributes are
@@ -115,17 +115,21 @@ it is recorded in the manifest instead of set.
 | `berm.owner` | `uid[:gid]` | the container's configured user, else `0:0` | Container-level default owner. Numeric only. |
 | `berm.mode` | octal string | `defaults.mode`, else `0400` | Container-level default mode. |
 
-Note, faithful to the code: in the current build `berm.owner` and `berm.mode`
-set the owner and mode for **whole-source renders** (`berm.dotenv`,
-`berm.envdir`). They are **not** applied to individual `berm.file.<name>`
-deliveries, which take their owner from the container's configured user (else
-`0:0`) and their mode from `defaults.mode` (else `0400`) unless the per-file
-`berm.file.<name>.owner` / `berm.file.<name>.mode` is set. To set a specific
-owner or mode on a file delivery, set it per file. The frozen design grammar
-intends `berm.owner` / `berm.mode` to also default every file delivery, but that
-wiring is not present in this build. There is deliberately no fleet-wide owner
-override anywhere: a single line must not be able to silently downgrade every
-secret's permissions.
+`berm.owner` and `berm.mode` are container-level defaults for **every** delivery
+on the container, both `berm.file.<name>` deliveries and whole-source renders
+(`berm.dotenv`, `berm.envdir`). Each is overridable per file. The precedence, the
+same for both owner and mode across files and renders:
+
+- **owner**: the per-file `berm.file.<name>.owner`, else the container-level
+  `berm.owner`, else the container's configured user, else `0:0`.
+- **mode**: the per-file `berm.file.<name>.mode`, else the container-level
+  `berm.mode`, else `defaults.mode` in `berm.yml`, else `0400`.
+
+The container-level tier sits between the per-file override and the built-in
+fallback. There is deliberately no fleet-wide owner override anywhere: a single
+line must not be able to silently downgrade every secret's permissions across the
+fleet, and the container-level default only ever affects one container's own
+deliveries.
 
 ## Whole-source renders
 

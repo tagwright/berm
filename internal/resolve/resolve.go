@@ -189,6 +189,13 @@ type resolver struct {
 	service       string
 	defaultSource string
 	containerUser string
+
+	// containerOwner and containerMode are the container-level berm.owner /
+	// berm.mode defaults. They sit between a per-file (or per-render) override and
+	// the built-in fallback, and apply to every file and render delivery. Empty
+	// when the label is unset.
+	containerOwner string
+	containerMode  string
 }
 
 // Resolve parses the container's labels, then validates and resolves them
@@ -216,10 +223,12 @@ func Resolve(in Input) (*Plan, error) {
 	}
 
 	r := &resolver{
-		cfg:           in.Config,
-		service:       service,
-		defaultSource: firstNonEmpty(spec.Source, service),
-		containerUser: in.ContainerUser,
+		cfg:            in.Config,
+		service:        service,
+		defaultSource:  firstNonEmpty(spec.Source, service),
+		containerUser:  in.ContainerUser,
+		containerOwner: spec.Owner,
+		containerMode:  spec.Mode,
 	}
 
 	// Delivery mechanism: the label, else the effective BERM_DEFAULT_DELIVERY,
@@ -347,8 +356,8 @@ func (r *resolver) resolveFile(fd label.FileDelivery) (FileBinding, *label.Error
 		Whole:      whole,
 		Key:        key,
 		Path:       path,
-		Owner:      firstNonEmpty(fd.Owner, r.ownerDefault()),
-		Mode:       firstNonEmpty(fd.Mode, r.modeDefault()),
+		Owner:      firstNonEmpty(fd.Owner, r.containerOwner, r.ownerDefault()),
+		Mode:       firstNonEmpty(fd.Mode, r.containerMode, r.modeDefault()),
 		PointerVar: pointer,
 	}, nil
 }

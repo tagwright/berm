@@ -22,7 +22,7 @@ func testConfig() *config.Config {
 			// Worked-example sources.
 			"firefly-db": {Format: "dotenv"},
 			"paperless":  {Format: "dotenv"},
-			"webapp": {Format: "dotenv"},
+			"webapp":     {Format: "dotenv"},
 			// webapp-tls is owned by webapp explicitly. Under the frozen strict
 			// exact-name rule its owner does NOT default to webapp from the shared
 			// name prefix, so the grant is expressed with owner: webapp.
@@ -234,6 +234,101 @@ func TestWholeSourceRenders(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got.Renders, want) {
 		t.Fatalf("renders mismatch:\n got %+v\nwant %+v", got.Renders, want)
+	}
+}
+
+// --- Container-level owner and mode on file deliveries ----------------------
+
+// TestFileInheritsContainerOwnerMode asserts that berm.owner / berm.mode set on
+// the container become the default owner and mode for a berm.file.<name>
+// delivery that omits its own owner and mode. This is the middle default tier
+// from the frozen grammar: per-file override, else container-level, else the
+// built-in fallback.
+func TestFileInheritsContainerOwnerMode(t *testing.T) {
+	got, err := Resolve(Input{
+		Labels: map[string]string{
+			"berm.enable":           "true",
+			"berm.owner":            "1000:1000",
+			"berm.mode":             "0440",
+			"berm.file.pgpass.from": "POSTGRES_PASSWORD",
+		},
+		ContainerID:     "c-firefly",
+		Service:         "firefly-db",
+		Config:          testConfig(),
+		DefaultDelivery: delivery.MechClient,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Files) != 1 {
+		t.Fatalf("want one file, got %+v", got.Files)
+	}
+	if got.Files[0].Owner != "1000:1000" {
+		t.Fatalf("want container-level owner 1000:1000, got %q", got.Files[0].Owner)
+	}
+	if got.Files[0].Mode != "0440" {
+		t.Fatalf("want container-level mode 0440, got %q", got.Files[0].Mode)
+	}
+}
+
+// TestFilePerFileOwnerModeOverridesContainer asserts that a per-file
+// berm.file.<name>.owner / .mode wins over the container-level berm.owner /
+// berm.mode default.
+func TestFilePerFileOwnerModeOverridesContainer(t *testing.T) {
+	got, err := Resolve(Input{
+		Labels: map[string]string{
+			"berm.enable":            "true",
+			"berm.owner":             "1000:1000",
+			"berm.mode":              "0440",
+			"berm.file.pgpass.from":  "POSTGRES_PASSWORD",
+			"berm.file.pgpass.owner": "2000:2000",
+			"berm.file.pgpass.mode":  "0400",
+		},
+		ContainerID:     "c-firefly",
+		Service:         "firefly-db",
+		Config:          testConfig(),
+		DefaultDelivery: delivery.MechClient,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Files) != 1 {
+		t.Fatalf("want one file, got %+v", got.Files)
+	}
+	if got.Files[0].Owner != "2000:2000" {
+		t.Fatalf("want per-file owner 2000:2000 to win, got %q", got.Files[0].Owner)
+	}
+	if got.Files[0].Mode != "0400" {
+		t.Fatalf("want per-file mode 0400 to win, got %q", got.Files[0].Mode)
+	}
+}
+
+// TestFileBuiltinFallbackWhenNoContainerOwnerMode asserts that with neither a
+// per-file nor a container-level owner or mode, the built-in fallback still
+// applies: the container's configured user (else 0:0) for owner, and
+// defaults.mode (else 0400) for mode.
+func TestFileBuiltinFallbackWhenNoContainerOwnerMode(t *testing.T) {
+	got, err := Resolve(Input{
+		Labels: map[string]string{
+			"berm.enable":           "true",
+			"berm.file.pgpass.from": "POSTGRES_PASSWORD",
+		},
+		ContainerID:     "c-firefly",
+		Service:         "firefly-db",
+		Config:          testConfig(),
+		DefaultDelivery: delivery.MechClient,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Files) != 1 {
+		t.Fatalf("want one file, got %+v", got.Files)
+	}
+	if got.Files[0].Owner != "0:0" {
+		t.Fatalf("want built-in fallback owner 0:0, got %q", got.Files[0].Owner)
+	}
+	if got.Files[0].Mode != "0400" {
+		t.Fatalf("want built-in fallback mode 0400, got %q", got.Files[0].Mode)
 	}
 }
 
