@@ -172,6 +172,91 @@ func TestClientFetchEndToEnd(t *testing.T) {
 	}
 }
 
+// TestApplyVolumeEndToEnd proves volume-mode delivery against the real SOPS/age
+// backend: it populates a tmpfs-backed volume dir with every file and render,
+// byte-correct, then writes the manifest last as the ready signal, and the
+// manifest never holds a value.
+func TestApplyVolumeEndToEnd(t *testing.T) {
+	requireTool(t, "sops")
+	requireTool(t, "age-keygen")
+
+	dir := t.TempDir()
+	keyPath, recipient := genAgeKey(t, dir, "default.key")
+
+	dbPass := "p@ss w0rd = tricky"
+	apiURL := "https://api.example/x?a=b&c=d"
+	dotenvPlain := []byte("DB_PASSWORD=" + dbPass + "\nAPI_URL=" + apiURL + "\n")
+	binPlain := []byte{0x00, 0x01, 0xff, 0xfe, 'T', 'L', 'S', '\n', 0x80}
+
+	sopsEncrypt(t, dir, recipient, "dotenv", dotenvPlain, filepath.Join(dir, "webapp.sops.env"))
+	sopsEncrypt(t, dir, recipient, "binary", binPlain, filepath.Join(dir, "webapp-tls.sops.bin"))
+
+	cfg := &config.Config{
+		AgeKeys: map[string]string{"default": keyPath},
+		Sources: map[string]config.Source{
+			"webapp":     {File: "webapp.sops.env", Format: "dotenv", AgeKey: "default"},
+			"webapp-tls": {File: "webapp-tls.sops.bin", Format: "binary", AgeKey: "default"},
+		},
+	}
+	cfg.Globals.SourcesRoot = dir
+	opener := NewConfigOpener(cfg, backend.NewSOPSAge(cfg.AgeKeys))
+
+	// The daemon-side mount of the shared volume. Prefer /dev/shm so the tmpfs
+	// enforcement is genuinely exercised.
+	mount, err := os.MkdirTemp("/dev/shm", "berm-vol-e2e-*")
+	req := true
+	if err != nil {
+		t.Log("NOTE: /dev/shm unavailable; volume e2e runs with tmpfs enforcement relaxed")
+		mount = t.TempDir()
+		req = false
+	} else {
+		defer os.RemoveAll(mount)
+	}
+
+	plan := Plan{
+		Container: "c1", Service: "webapp", Mechanism: MechVolume,
+		Files: []FileTarget{
+			{Name: "pgpass", Source: "webapp", Format: backend.FormatDotenv, Key: "DB_PASSWORD",
+				Path: "/run/berm/pgpass", Owner: "1000:1000", Mode: "0400", PointerVar: "DB_PASSWORD_FILE"},
+			{Name: "tls", Source: "webapp-tls", Format: backend.FormatBinary, Whole: true,
+				Path: "/run/berm/tls.key", Owner: "1000:1000", Mode: "0440"},
+		},
+		Renders: []RenderTarget{
+			{Kind: RenderDotenv, Source: "webapp", Path: "/run/berm/all.env", Owner: "0:0", Mode: "0400"},
+		},
+	}
+
+	if err := applyVolume(context.Background(), plan, opener, mount, time.Unix(1_700_000_000, 0), req); err != nil {
+		t.Fatalf("applyVolume: %v", err)
+	}
+
+	if got, _ := os.ReadFile(filepath.Join(mount, "pgpass")); !bytes.Equal(got, []byte(dbPass)) {
+		t.Errorf("pgpass = %q, want %q", got, dbPass)
+	}
+	if got, _ := os.ReadFile(filepath.Join(mount, "tls.key")); !bytes.Equal(got, binPlain) {
+		t.Errorf("tls = %v, want %v", got, binPlain)
+	}
+	wantRender := "DB_PASSWORD=" + dbPass + "\nAPI_URL=" + apiURL + "\n"
+	if got, _ := os.ReadFile(filepath.Join(mount, "all.env")); !bytes.Equal(got, []byte(wantRender)) {
+		t.Errorf("render = %q, want %q", got, wantRender)
+	}
+
+	manPath := filepath.Join(mount, "manifest")
+	ready, err := ManifestReady(manPath)
+	if err != nil || !ready {
+		t.Fatalf("ManifestReady = (%v, %v), want (true, nil)", ready, err)
+	}
+	man, _ := os.ReadFile(manPath)
+	for _, v := range []string{dbPass, apiURL, string(binPlain)} {
+		if len(v) >= 4 && bytes.Contains(man, []byte(v)) {
+			t.Fatalf("manifest leaked a value %q", v)
+		}
+	}
+	if !bytes.Contains(man, []byte("sha256:")) {
+		t.Errorf("manifest missing a ciphertext hash:\n%s", man)
+	}
+}
+
 // TestWriteFileEndToEnd proves the streaming tmpfs writer against the real
 // backend: it lands the decrypted secret at a tmpfs path, byte-correct.
 func TestWriteFileEndToEnd(t *testing.T) {

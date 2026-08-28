@@ -135,6 +135,21 @@ func (m *Manifest) Marshal() ([]byte, error) {
 	return b, nil
 }
 
+// ParseManifest decodes a serialized manifest. It is what a waiter or the
+// staleness ledger reads back. A manifest with no version is rejected: a
+// zero-version blob is not a manifest this build wrote, and treating it as one
+// would misread the ready signal.
+func ParseManifest(data []byte) (*Manifest, error) {
+	var m Manifest
+	if err := json.Unmarshal(data, &m); err != nil {
+		return nil, fmt.Errorf("delivery: parse manifest: %w", err)
+	}
+	if m.Version == 0 {
+		return nil, fmt.Errorf("delivery: manifest has no version")
+	}
+	return &m, nil
+}
+
 // WriteManifest lands the serialized manifest atomically at path (default
 // DefaultManifestPath) on tmpfs. The manifest is non-secret, but it still lands
 // on tmpfs and via temp-then-rename, because its atomic appearance is the ready
