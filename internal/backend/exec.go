@@ -120,26 +120,79 @@ func streamDecrypt(cmd *exec.Cmd, dst io.Writer) (int64, error) {
 	return cw.n, nil
 }
 
+// captureCopyChunk is the size of the single, locked, reused transit buffer the
+// capture path hands io.CopyBuffer. Plaintext read from the sops pipe lands only
+// in this locked page before being sealed into the stream, so no plaintext ever
+// touches an unlocked Go heap buffer. It is one memguard stream chunk wide so a
+// full read maps to one sealed enclave.
+var captureCopyChunk = memguard.StreamChunkSize
+
+// onlyReader hides any WriterTo the underlying reader may implement, so
+// io.CopyBuffer is forced to use the locked transit buffer we hand it rather
+// than a fast-path that would allocate its own unlocked buffer for the plaintext.
+type onlyReader struct{ io.Reader }
+
 // captureDecrypt runs sops and moves its whole stdout into a memguard
 // LockedBuffer, returning that buffer for the caller to parse and then Destroy.
 // This is the path that must hold plaintext to parse a dotenv KEY or to hand a
-// value to the process environment. sops stdout is read into a transient Go
-// slice (unavoidable, the size is not known ahead of time), then that slice is
-// moved into locked, non-swappable memory and the transient wiped. A nil buffer
-// with a nil error means the source decrypted to empty.
+// value to the process environment.
+//
+// Plaintext never enters a growable Go heap buffer. sops stdout is read through
+// a single locked transit page (captureCopyChunk) into a memguard Stream, which
+// seals each chunk into an encrypted, non-swappable enclave as it arrives. The
+// stream is then flushed into one LockedBuffer, grown page by page in locked
+// memory. No cmd.Output, no bytes.Buffer, and the only unlocked allocations on
+// this path are non-secret (the bounded stderr head and error strings). A nil
+// buffer with a nil error means the source decrypted to empty.
 func captureDecrypt(cmd *exec.Cmd) (*memguard.LockedBuffer, error) {
 	var stderr bytes.Buffer
 	cmd.Stderr = &boundedWriter{max: stderrHead, buf: &stderr}
-	out, err := cmd.Output()
+
+	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		memguard.WipeBytes(out)
+		return nil, fmt.Errorf("%w: %v", ErrDecrypt, err)
+	}
+	if err := cmd.Start(); err != nil {
 		return nil, classifyExec(err, stderr.Bytes())
 	}
-	if len(out) == 0 {
+
+	stream := memguard.NewStream()
+	transit := memguard.NewBuffer(captureCopyChunk)
+	_, copyErr := io.CopyBuffer(stream, onlyReader{stdout}, transit.Bytes())
+	transit.Destroy()
+
+	// The pipe must be fully drained (above) before Wait, per exec.StdoutPipe.
+	waitErr := cmd.Wait()
+	if waitErr != nil {
+		drainStream(stream)
+		return nil, classifyExec(waitErr, stderr.Bytes())
+	}
+	if copyErr != nil {
+		drainStream(stream)
+		return nil, fmt.Errorf("%w: %v", ErrDecrypt, copyErr)
+	}
+
+	buf, err := stream.Flush()
+	if err != nil {
+		if buf != nil {
+			buf.Destroy()
+		}
+		return nil, fmt.Errorf("%w: %v", ErrDecrypt, err)
+	}
+	if buf.Size() == 0 {
+		buf.Destroy()
 		return nil, nil
 	}
-	// NewBufferFromBytes copies out into locked memory and wipes out.
-	return memguard.NewBufferFromBytes(out), nil
+	return buf, nil
+}
+
+// drainStream flushes whatever plaintext a stream still holds into a locked
+// buffer and destroys it, zeroizing it best-effort. It is the error-path cleanup
+// so a partially filled stream never strands live secret memory.
+func drainStream(s *memguard.Stream) {
+	if lb, err := s.Flush(); err == nil && lb != nil {
+		lb.Destroy()
+	}
 }
 
 // classifyExec turns a sops exec error into a typed, scrubbed backend error. A

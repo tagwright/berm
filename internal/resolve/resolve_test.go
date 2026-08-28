@@ -22,12 +22,20 @@ func testConfig() *config.Config {
 			// Worked-example sources.
 			"firefly-db": {Format: "dotenv"},
 			"paperless":  {Format: "dotenv"},
-			"webapp":     {Format: "dotenv"},
-			"webapp-tls": {Format: "binary"},
+			"webapp": {Format: "dotenv"},
+			// webapp-tls is owned by webapp explicitly. Under the frozen strict
+			// exact-name rule its owner does NOT default to webapp from the shared
+			// name prefix, so the grant is expressed with owner: webapp.
+			"webapp-tls": {Format: "binary", Owner: "webapp"},
 			"shared-db":  {Format: "dotenv", Owner: "postgres", Access: []string{"webapp", "reporter"}},
 			// Error-class sources.
-			"tlsbin":  {Format: "binary"},                   // for source/KEY-against-binary
-			"billing": {Format: "dotenv", Owner: "billing"}, // owned by another service, no grant
+			"tlsbin": {Format: "binary"}, // service tlsbin owns its same-named source
+			// webapp-cache is named under the webapp- prefix but has no owner and no
+			// grant. Under the removed prefix rule webapp would have owned it; under
+			// the strict exact-name rule its owner defaults to "webapp-cache", so
+			// webapp may not read it. This proves the prefix loophole is closed.
+			"webapp-cache": {Format: "dotenv"},
+			"billing":      {Format: "dotenv", Owner: "billing"}, // owned by another service, no grant
 		},
 		Defaults: config.Defaults{},
 	}
@@ -241,9 +249,9 @@ func TestErrorBareRefAgainstDotenv(t *testing.T) {
 }
 
 func TestErrorSourceKeyAgainstBinary(t *testing.T) {
-	// A source/KEY ref against a binary source. tlsbin is owned by service
-	// tls... no: it is unowned and service "tlsbin"-namespaced, so the service
-	// tlsbin owns it and we reach the format check.
+	// A source/KEY ref against a binary source. tlsbin has no explicit owner, so
+	// its effective owner defaults to its own name "tlsbin", which equals the
+	// service identity, so tlsbin owns it and we reach the format check.
 	plan, err := Resolve(Input{
 		Labels:      map[string]string{"berm.enable": "true", "berm.file.x.from": "tlsbin/PRIVATE_KEY"},
 		ContainerID: "c", Service: "tlsbin", Config: testConfig(), DefaultDelivery: delivery.MechClient,
@@ -273,6 +281,23 @@ func TestErrorUngrantedCrossServiceRefIsSticky(t *testing.T) {
 	e := wantErr(t, plan, err, label.ClassUngrantedRef)
 	if !e.Sticky() {
 		t.Fatal("ungranted ref must be sticky")
+	}
+}
+
+func TestErrorPrefixOwnershipLoopholeClosed(t *testing.T) {
+	// webapp references webapp-cache/KEY. Under the removed "<service>-" prefix
+	// ownership rule webapp would have owned webapp-cache for free. Under the
+	// frozen strict exact-name rule webapp-cache's effective owner is
+	// "webapp-cache" (its own name, no explicit owner), which is not webapp, and
+	// its access list names no one, so webapp may not read it. The result is a
+	// sticky ungranted error, proving the prefix loophole is gone.
+	plan, err := Resolve(Input{
+		Labels:      map[string]string{"berm.enable": "true", "berm.file.x.from": "webapp-cache/API_KEY"},
+		ContainerID: "c", Service: "webapp", Config: testConfig(), DefaultDelivery: delivery.MechClient,
+	})
+	e := wantErr(t, plan, err, label.ClassUngrantedRef)
+	if !e.Sticky() {
+		t.Fatal("ungranted prefix-named ref must be sticky")
 	}
 }
 

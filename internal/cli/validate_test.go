@@ -22,7 +22,9 @@ func validateConfig() *config.Config {
 		Sources: map[string]config.Source{
 			"webapp":     {File: "webapp.sops.env", Format: "dotenv"},
 			"shared-db":  {File: "shared-db.sops.env", Format: "dotenv", Owner: "postgres", Access: []string{"webapp"}},
-			"webapp-tls": {File: "webapp-tls.sops.bin", Format: "binary"},
+			// webapp-tls is owned by webapp explicitly, per the strict exact-name
+			// scoping rule: ownership is never inferred from the shared name prefix.
+			"webapp-tls": {File: "webapp-tls.sops.bin", Format: "binary", Owner: "webapp"},
 		},
 		Defaults: config.Defaults{Delivery: "client"},
 	}

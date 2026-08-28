@@ -80,6 +80,16 @@ func BuildBundle(ctx context.Context, callerService string, plan Plan, opener Op
 	return b, nil
 }
 
+// drainStream flushes whatever plaintext a memguard Stream still holds into a
+// locked buffer and destroys it, zeroizing it best-effort. It is the render
+// error-path cleanup so a partially assembled render never strands live secret
+// memory.
+func drainStream(s *memguard.Stream) {
+	if lb, err := s.Flush(); err == nil && lb != nil {
+		lb.Destroy()
+	}
+}
+
 // checkScope confirms the plan was built for this caller. An unset service on
 // either side is tolerated only in the library-level tests that exercise
 // BuildBundle without a live peer; the daemon always passes the resolved
@@ -145,8 +155,12 @@ func addFile(ctx context.Context, b *wire.Bundle, opener Opener, ft FileTarget) 
 //
 // Unlike the hook and volume WriteRender path, which streams each value straight
 // to a file descriptor, the client bundle must carry the rendered bytes across
-// the socket, so a dotenv render is assembled in a transient scratch that is
-// wiped the instant it is copied into the bundle's locked buffer.
+// the socket. The dotenv render is assembled into a memguard Stream, which seals
+// each value into an encrypted, non-swappable enclave as it is written, so the
+// growing render never lives in an unlocked Go heap buffer. The stream is
+// flushed into one locked buffer, copied into the bundle's own locked memory,
+// and destroyed. The only unlocked bytes on this path are the non-secret KEY
+// names and separators.
 func addRender(ctx context.Context, b *wire.Bundle, opener Opener, rt RenderTarget) error {
 	op, err := opener.OpenSource(ctx, rt.Source)
 	if err != nil {
@@ -161,22 +175,30 @@ func addRender(ctx context.Context, b *wire.Bundle, opener Opener, rt RenderTarg
 
 	switch rt.Kind {
 	case RenderDotenv:
-		var scratch []byte
+		render := memguard.NewStream()
 		for _, k := range keys {
 			v, e := op.Value(k)
 			if e != nil {
-				memguard.WipeBytes(scratch)
+				drainStream(render)
 				return fmt.Errorf("delivery: read %q for dotenv render: %w", k, e)
 			}
-			scratch = append(scratch, k...)
-			scratch = append(scratch, '=')
-			scratch = append(scratch, v...)
-			scratch = append(scratch, '\n')
+			// KEY name and separators are not secret; only v is, and it moves
+			// locked-slice to sealed-enclave with no unlocked heap copy.
+			render.Write([]byte(k + "="))
+			render.Write(v)
+			render.Write([]byte{'\n'})
+		}
+		rendered, e := render.Flush()
+		if e != nil {
+			if rendered != nil {
+				rendered.Destroy()
+			}
+			return fmt.Errorf("delivery: assemble dotenv render for %q: %w", rt.Source, e)
 		}
 		b.Files = append(b.Files, wire.File{
-			Path: rt.Path, Owner: rt.Owner, Mode: rt.Mode, Data: b.AddSecret(scratch),
+			Path: rt.Path, Owner: rt.Owner, Mode: rt.Mode, Data: b.AddSecret(rendered.Bytes()),
 		})
-		memguard.WipeBytes(scratch)
+		rendered.Destroy()
 		return nil
 
 	case RenderEnvdir:

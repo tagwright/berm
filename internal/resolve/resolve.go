@@ -12,15 +12,15 @@
 // mechanism, and the env-exposure flag) that the delivery layer consumes.
 //
 // The security-critical fork is scoping (owner plus grants). A source's owner
-// defaults to the source name. The owner may read it with no grant, and any
-// other service needs the source's access list to name it. See the ownership
-// note on serviceOwns for how the worked-example auxiliary source (webapp
-// reading webapp-tls) resolves.
+// defaults to the source name, and ownership is strict exact-name: a service
+// owns a source only when the source's effective owner (explicit owner: else the
+// source name) equals the service identity. The owner may read it with no grant,
+// and any other service needs the source's access list to name it. See the
+// ownership note on serviceOwns for how the worked-example auxiliary source
+// (webapp reading webapp-tls, which sets owner: webapp) resolves.
 package resolve
 
 import (
-	"strings"
-
 	"github.com/tagwright/berm/internal/backend"
 	"github.com/tagwright/berm/internal/config"
 	"github.com/tagwright/berm/internal/delivery"
@@ -453,21 +453,21 @@ func sourceFormat(name string, src config.Source) (backend.SourceFormat, *label.
 // serviceOwns reports whether service owns the named source, which lets it read
 // the source with no grant and is the requirement for the all sentinel.
 //
-// Ownership note (a resolved grammar ambiguity, flagged in the build report):
-// the grammar says a source's owner defaults to the source's own name. Taken
-// literally, the worked example's webapp reading its auxiliary webapp-tls source
-// (owner defaulting to "webapp-tls", no access list) would be an ungranted
-// error, yet the example resolves successfully. So a defaulted owner is read as
-// a service's own namespace: a service owns a source whose name equals its
-// identity or is namespaced under it as "<service>-...". An explicit owner is
-// authoritative and matched exactly. This keeps a service's own and auxiliary
-// sources readable without grant boilerplate while leaving every other service's
-// sources closed unless access names the reader.
+// Ownership is strict exact-name, faithful to the frozen grammar (Scoping Fork
+// 4): a source's effective owner is its explicit owner: field, or, when that is
+// unset, the source's own name. A service owns the source if and only if that
+// effective owner equals the service identity. There is no prefix or namespace
+// rule: a service reading a differently-named source it does not explicitly own
+// requires that source's access list to name it, exactly like any other
+// cross-service read. So a source shared under a service's own name is expressed
+// by setting owner: <service> on it (as the worked example's webapp-tls does),
+// never inferred from a shared name prefix.
 func serviceOwns(service, name string, src config.Source) bool {
-	if src.Owner == "" {
-		return name == service || strings.HasPrefix(name, service+"-")
+	owner := src.Owner
+	if owner == "" {
+		owner = name
 	}
-	return src.Owner == service
+	return owner == service
 }
 
 // serviceMayRead reports whether service may read the named source: it owns the
