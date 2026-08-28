@@ -12,11 +12,22 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/spf13/cobra"
 
+	"github.com/tagwright/beacon"
+
+	"github.com/tagwright/berm/internal/alert"
+	"github.com/tagwright/berm/internal/backend"
+	"github.com/tagwright/berm/internal/config"
+	"github.com/tagwright/berm/internal/daemon"
+	"github.com/tagwright/berm/internal/delivery"
 	"github.com/tagwright/berm/internal/version"
 )
 
@@ -62,10 +73,74 @@ func newDaemonCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "daemon",
 		Short: "Run the injection daemon: watch the socket, resolve and deliver",
-		RunE:  notImplemented("daemon"),
+		RunE:  runDaemon,
 	}
 	cmd.Flags().String("config", "/etc/berm/berm.yml", "path to berm.yml")
+	cmd.Flags().String("socket", "", "berm listen socket (default /run/berm/berm.sock)")
 	return cmd
+}
+
+// runDaemon loads berm.yml, builds the runtime, backend, opener, and alert sink,
+// constructs the daemon, and runs it until SIGINT or SIGTERM, then shuts it down
+// cleanly. It is the full daemon subcommand: chunk 6's wiring of every piece the
+// earlier chunks built into one running control plane.
+func runDaemon(cmd *cobra.Command, _ []string) error {
+	cfgPath, _ := cmd.Flags().GetString("config")
+	sockFlag, _ := cmd.Flags().GetString("socket")
+
+	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	slog.SetDefault(log)
+
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		return err
+	}
+
+	rt, err := daemon.SelectRuntime(cfg)
+	if err != nil {
+		return err
+	}
+	defer rt.Close()
+
+	// The backend holds the age key by path only; it never reads the key
+	// material itself (the sops subprocess does, at decrypt time).
+	be := backend.NewSOPSAge(cfg.AgeKeys)
+	opener := delivery.NewConfigOpener(cfg, be)
+
+	sink, err := buildSink()
+	if err != nil {
+		return err
+	}
+
+	d, err := daemon.New(daemon.Config{
+		Runtime:    rt,
+		Berm:       cfg,
+		Opener:     opener,
+		Sink:       sink,
+		SocketPath: sockFlag,
+		Logger:     log,
+	})
+	if err != nil {
+		return err
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	return d.Run(ctx)
+}
+
+// buildSink builds the beacon-backed alert sink. Until the operator's full
+// beacon channel config lands (a later chunk owns that schema), the sink routes
+// diagnostics through beacon's always-available log channel into the daemon
+// logger, so alerts are never silently dropped. beacon carries no secret value.
+func buildSink() (alert.Sink, error) {
+	b, err := beacon.New(beacon.Config{
+		Channels: []beacon.ChannelConfig{{Type: "log", MinLevel: beacon.LevelInfo}},
+	}, nil)
+	if err != nil {
+		return nil, err
+	}
+	return alert.NewBeaconSink(b), nil
 }
 
 func newStatusCmd() *cobra.Command {
