@@ -23,3 +23,6 @@
 /test/integration/sources/
 /test/integration/keys/
 /test/integration/out/
+/test/integration/sources-podman/
+/test/integration/keys-podman/
+/test/integration/out-podman/

@@ -1,0 +1,39 @@
+# berm.yml for the nested-podman integration harness (run-podman.sh). Nothing
+# here is a secret value: names, paths, formats, owners, and grants only. The
+# ciphertext under BERM_SOURCES_ROOT is generated at run time by run-podman.sh
+# (sops + a fresh age key) and this file is mounted read-only into the
+# berm-itest-daemon container that runs INSIDE the nested Podman.
+#
+# Paths are the in-container paths the daemon sees: the age key at
+# /run/berm/age/default.key (daemon-only, read-only) and the source files under
+# BERM_SOURCES_ROOT (/var/lib/berm/sources, read-only).
+
+age_keys:
+  default: /run/berm/age/default.key
+
+sources:
+  # The hook happy-path source: a file secret owned by svcenv, delivered by the
+  # OCI pre-start hook into the container's own tmpfs before PID 1.
+  svcenv:
+    file: svcenv.sops.env
+    format: dotenv
+
+  # The client happy-path source, owned by svca. Proves peer-auth (SO_PEERCRED
+  # to cgroup to libpod container id) under Podman.
+  svca:
+    file: svca.sops.env
+    format: dotenv
+
+  # The volume-mode source, owned by svcv.
+  svcv:
+    file: svcv.sops.env
+    format: dotenv
+
+  # A source owned by a compose SERVICE identity (not a berm.name), to prove the
+  # Podman compose/pod service-identity derivation resolves to the right source.
+  svcompose:
+    file: svcompose.sops.env
+    format: dotenv
+
+defaults:
+  mode: "0400"
