@@ -1,9 +1,30 @@
 # Testing
 
 berm is tested at two levels: the Go unit and library tests that ship with each
-package, and a real integration harness that drives the actual daemon image
-against live Docker containers over the real Docker socket. This document records
-what is proven, what is compile-only, and what is unproven, honestly.
+package, and two real integration harnesses that drive the actual daemon image
+against live containers, one over a real Docker socket and one against a nested
+Podman host. This document records what is proven, what is compile-only, and what
+is unproven, honestly.
+
+## Coverage matrix
+
+| Capability | Status | Where |
+|---|---|---|
+| Client mode, file + env + binary delivery on Docker | proven live | Docker harness |
+| Volume mode + turnkey compose convergence on Docker | proven live | Docker harness |
+| Hook mode end to end (createContainer, own mount ns, before PID 1) on Podman | proven live | nested-Podman harness |
+| Client and volume modes on Podman | proven live | nested-Podman harness |
+| Peer-auth isolation, adversarial, both runtimes | proven live | both harnesses |
+| No-store / no-log / no-plaintext-on-disk, age key never in an app | proven live | both harnesses |
+| Every validation failure path (skip-and-alert) | proven live | Docker harness |
+| Rotation staleness (`berm stale` drift) | proven live | Docker harness |
+| Rootless Podman, daemon + hook end to end | unproven | needs a real rootless Podman host |
+| cgroup v1 peer-auth | compile-only (unit fixtures) | live proof is cgroup v2 |
+
+Across the two harnesses the integration campaign found and fixed **five** real
+bugs, three on the Docker path and two on the Podman hook path, each in code that
+unit tests could not reach. They are detailed in the two "bugs found and fixed"
+sections below.
 
 ## Unit and library tests
 
@@ -190,12 +211,11 @@ both in code that unit tests and the Docker harness could not reach.
    hook mode the `berm.*` config is set as OCI ANNOTATIONS (not labels), which is
    also what the hook `when` trigger already needs.
 
-### Coverage: COMPILE-ONLY / UNPROVEN (Docker harness)
+## Bugs found and fixed by the Docker integration pass
 
-## Bugs found and fixed by the integration pass
-
-Every integration pass in this suite has found at least one real bug. This one
-found three, all in paths unit tests could not reach:
+Every integration pass in this suite has found at least one real bug. The Docker
+pass found three (the nested-Podman pass found two more, above, for five across
+the campaign), all in paths unit tests could not reach:
 
 1. Empty BERM_SOCKET produced the unparseable Engine API host `unix://`. With no
    BERM_SOCKET set (as the shipped deploy examples run), the core adapter built
