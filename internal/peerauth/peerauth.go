@@ -111,7 +111,7 @@ func (a *Authenticator) resolve(ctx context.Context, cred Ucred) (*Identity, err
 		return nil, fmt.Errorf("peerauth: inspect id mismatch: cgroup %s resolved to %s", id, c.ID)
 	}
 
-	svc, err := serviceName(c)
+	svc, err := ServiceName(c)
 	if err != nil {
 		return nil, err
 	}
@@ -145,13 +145,19 @@ func (a *Authenticator) Verify(id *Identity) error {
 	return nil
 }
 
-// serviceName derives the caller's berm service identity per the grammar: the
+// ServiceName derives a container's berm service identity per the grammar: the
 // berm.name label override, else the compose service label the runtime
 // normalized, else the container name. The name suffix is honored under both
 // recognized prefixes, and the same suffix under both prefixes with different
 // values is a conflict the identity refuses (the ballast cross-prefix rule),
 // since a security-critical identity must not be ambiguous.
-func serviceName(c runtime.Container) (string, error) {
+//
+// It is exported because the hook-mode path (which does not use SO_PEERCRED)
+// needs the same berm.name-first identity derivation from an inspected
+// container, and duplicating a security-critical identity computation would be a
+// hazard. The peer-auth path uses it after the SO_PEERCRED walk; the hook path
+// uses it on the container the daemon inspected by the presented id.
+func ServiceName(c runtime.Container) (string, error) {
 	name, err := bermName(c.Labels)
 	if err != nil {
 		return "", err

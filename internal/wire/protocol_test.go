@@ -93,3 +93,84 @@ func TestVersionMismatchRejected(t *testing.T) {
 		t.Fatal("expected a version-mismatch error")
 	}
 }
+
+func TestProtocolVersionIsTwo(t *testing.T) {
+	// The hook-request addition bumped the protocol version to 2. This pins the
+	// bump so a future change to the frame layout has to bump it again on
+	// purpose.
+	if ProtocolVersion != 2 {
+		t.Fatalf("ProtocolVersion = %d, want 2 after the hook-request bump", ProtocolVersion)
+	}
+}
+
+func TestHookRequestRoundTrip(t *testing.T) {
+	const id = "3f1a2b9c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8"
+	var buf bytes.Buffer
+	if err := WriteHookRequest(&buf, id); err != nil {
+		t.Fatalf("WriteHookRequest: %v", err)
+	}
+
+	// Whole-request reader.
+	got, err := ReadHookRequest(bytes.NewReader(buf.Bytes()))
+	if err != nil {
+		t.Fatalf("ReadHookRequest: %v", err)
+	}
+	if got != id {
+		t.Errorf("hook container id = %q, want %q", got, id)
+	}
+
+	// Header-then-body dispatch, the path the daemon loop uses.
+	r := bytes.NewReader(buf.Bytes())
+	rt, err := ReadRequestHeader(r)
+	if err != nil {
+		t.Fatalf("ReadRequestHeader: %v", err)
+	}
+	if rt != RequestHook {
+		t.Fatalf("request type = %v, want RequestHook", rt)
+	}
+	body, err := ReadHookBody(r)
+	if err != nil {
+		t.Fatalf("ReadHookBody: %v", err)
+	}
+	if body != id {
+		t.Errorf("hook body id = %q, want %q", body, id)
+	}
+}
+
+func TestWriteHookRequestRejectsEmptyID(t *testing.T) {
+	var buf bytes.Buffer
+	if err := WriteHookRequest(&buf, ""); err == nil {
+		t.Fatal("expected an error writing a hook request with no container id")
+	}
+}
+
+func TestRequestHeaderDispatch(t *testing.T) {
+	// A fetch request classifies as RequestFetch; ReadRequest still accepts it,
+	// and rejects a hook request as not-a-fetch.
+	var fetchBuf bytes.Buffer
+	if err := WriteRequest(&fetchBuf); err != nil {
+		t.Fatal(err)
+	}
+	if rt, err := ReadRequestHeader(bytes.NewReader(fetchBuf.Bytes())); err != nil || rt != RequestFetch {
+		t.Fatalf("fetch header = (%v, %v), want (RequestFetch, nil)", rt, err)
+	}
+	if err := ReadRequest(bytes.NewReader(fetchBuf.Bytes())); err != nil {
+		t.Fatalf("ReadRequest(fetch) = %v, want nil", err)
+	}
+
+	var hookBuf bytes.Buffer
+	if err := WriteHookRequest(&hookBuf, "abc"); err != nil {
+		t.Fatal(err)
+	}
+	if err := ReadRequest(bytes.NewReader(hookBuf.Bytes())); err == nil {
+		t.Fatal("ReadRequest must reject a hook request")
+	}
+}
+
+func TestHookRequestVersionMismatchRejected(t *testing.T) {
+	// A hook frame with a wrong version byte is rejected, not misparsed.
+	buf := bytes.NewReader([]byte{ProtocolVersion + 1, msgHookRequest})
+	if _, err := ReadRequestHeader(buf); err == nil {
+		t.Fatal("expected a version-mismatch error on a hook header")
+	}
+}

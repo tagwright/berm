@@ -1,11 +1,27 @@
-# berm client-fetch wire protocol
+# berm wire protocol
 
-The one-shot client (`berm-client`) and the daemon exchange a single
-request/response over a local, peer-authenticated unix socket. The daemon
-authenticates the caller from the socket's own `SO_PEERCRED`, resolves the
-caller's plan, and returns exactly that caller's secrets. Secrets cross this
-socket in plaintext. That is unavoidable and acceptable: the socket is local,
-peer-authenticated, and the bytes never touch persistent disk on either side.
+The consumers (`berm-client` and `berm-hook`) and the daemon exchange a single
+request/response over a local unix socket. Secrets cross this socket in
+plaintext. That is unavoidable and acceptable: the socket is local, the request
+is trusted or peer-authenticated per the two request types below, and the bytes
+never touch persistent disk on either side.
+
+There are two request types, with two deliberately different trust models:
+
+- The **fetch request** (client mode) carries no body. The daemon derives the
+  caller's identity from the socket's own kernel-attested `SO_PEERCRED`, walks it
+  to the caller's container, resolves that container's plan, and returns exactly
+  its secrets. A client cannot ask for another container's secrets, because it
+  presents no id at all: identity is proven by the kernel, not asserted by the
+  client.
+- The **hook request** (hook mode) carries an OCI container id. It comes from the
+  OCI pre-start hook, a trusted, privileged host-side injector the operator
+  installs via Podman's `hooks_dir`. The hook has no peer container identity of
+  its own, so it presents the id of the container it is populating. The daemon
+  does not trust that id blindly: it inspects the container, confirms it is
+  berm-enabled, and resolves its labels before returning anything. Client =
+  kernel-attested peer identity; hook = trusted privileged injector presenting an
+  id the daemon then validates.
 
 The protocol is implemented in `internal/wire`. It is length-prefixed and
 versioned so it can evolve without a silent misparse.
@@ -15,7 +31,7 @@ versioned so it can evolve without a silent misparse.
 Every frame leads with two bytes:
 
 ```
-byte 0   protocol version   (currently 1)
+byte 0   protocol version   (currently 2)
 byte 1   message type
 ```
 
@@ -24,31 +40,50 @@ Message types:
 | type | name             | direction        |
 |------|------------------|------------------|
 | 1    | fetch request    | client -> daemon |
-| 2    | bundle response  | daemon -> client |
-| 3    | error response   | daemon -> client |
+| 2    | bundle response  | daemon -> consumer |
+| 3    | error response   | daemon -> consumer |
+| 4    | hook request     | hook   -> daemon |
 
 All multi-byte integers are big-endian. Byte strings are length-prefixed: a
-`u16` length for names, paths, owners, modes, and error text; a `u32` length for
-secret payloads and the manifest. The decoder rejects any field longer than
-64 MiB, so a corrupt or hostile length cannot drive an unbounded allocation.
+`u16` length for names, paths, owners, modes, error text, and the hook's
+container id; a `u32` length for secret payloads and the manifest. The decoder
+rejects any field longer than 64 MiB, so a corrupt or hostile length cannot
+drive an unbounded allocation.
 
 A version mismatch on either side is a hard, loud error, never a best-effort
-parse.
+parse. The daemon reads the header with `wire.ReadRequestHeader`, which returns
+the request type, and dispatches: a fetch request runs the peer-auth path (no
+more bytes to read), a hook request is followed by `wire.ReadHookBody` for the
+container id.
 
 ## Fetch request (type 1)
 
 ```
-byte  version = 1
+byte  version = 2
 byte  type    = 1
 ```
 
 No body. The daemon derives the caller's identity from the connection's peer
 credentials, never from anything the client sends, so there is nothing to carry.
 
+## Hook request (type 4)
+
+```
+byte   version = 2
+byte   type    = 4
+u16    idLen
+bytes  containerID   (the OCI container id from the runtime state JSON)
+```
+
+The container id is not a secret. The daemon inspects it, confirms the container
+is berm-enabled, resolves its plan, refuses any env (hook mode is files only),
+and returns its file bundle. A hook request for a container that is not
+berm-enabled, or whose resolved mechanism is not `hook`, is refused.
+
 ## Error response (type 3)
 
 ```
-byte   version = 1
+byte   version = 2
 byte   type    = 3
 u16    reasonLen
 bytes  reason        (scrubbed, never a secret value)
@@ -57,7 +92,7 @@ bytes  reason        (scrubbed, never a secret value)
 ## Bundle response (type 2)
 
 ```
-byte   version = 1
+byte   version = 2
 byte   type    = 2
 
 u32    nFiles
@@ -92,17 +127,23 @@ manifest instead of setting it.
 
 ## Handling on each side
 
-- Daemon: `wire.ReadRequest`, then `delivery.BuildBundle(...)`, then
-  `wire.EncodeBundle` (or `wire.WriteError`), then `bundle.Destroy()`. The
-  secret bytes stream from their locked buffers straight onto the connection.
+- Daemon: `wire.ReadRequestHeader` to learn the request type, then either the
+  peer-auth path (fetch) with `delivery.BuildBundle(...)`, or `wire.ReadHookBody`
+  plus `hookd.Handler.Handle(...)` (hook). Then `wire.EncodeBundle` (or
+  `wire.WriteError`), then `bundle.Destroy()`. The secret bytes stream from their
+  locked buffers straight onto the connection.
 - Client: `wire.WriteRequest`, then `wire.ReadResponse`, which decodes secret
   payloads directly into fresh locked buffers. The client applies files and
   sets env, then `bundle.Destroy()` zeroizes every secret buffer (the exec form
   does this in the instant before `execve`).
+- Hook (`berm-hook`): parse the OCI state from stdin, `wire.WriteHookRequest`
+  with the container id, then `wire.ReadResponse`. It writes the bundle's files
+  into the container's mount namespace before PID 1 and `bundle.Destroy()`s. A
+  hook bundle carries files and a manifest only, never env.
 
 ## Versioning
 
-The leading version byte is bumped whenever the frame layout changes. Bump
-`wire.ProtocolVersion`, keep the old decoder path if backward compatibility is
-wanted, and both ends reject a version they do not implement rather than
-misread a secret.
+The leading version byte is bumped whenever the frame layout changes. Version 2
+added the hook request (type 4). Bump `wire.ProtocolVersion`, keep the old
+decoder path if backward compatibility is wanted, and both ends reject a version
+they do not implement rather than misread a secret.

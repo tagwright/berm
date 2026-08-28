@@ -33,9 +33,22 @@ const DefaultManifestPath = "/run/berm/manifest"
 // directions. It is bumped when the frame layout changes so an old client and
 // a new daemon (or the reverse) fail loudly on a version mismatch instead of
 // misparsing a secret payload. See docs/PROTOCOL.md for the full frame layout.
-const ProtocolVersion byte = 1
+//
+// Version 2 added the hook-request message type (msgHookRequest), which carries
+// a container id, alongside the original fetch request (which carries no body).
+const ProtocolVersion byte = 2
 
 // Message type bytes, the second byte of every frame.
+//
+// There are deliberately two request types with two different trust models. The
+// fetch request carries no body: the daemon derives the caller's identity from
+// the kernel-attested peer credentials of the socket (SO_PEERCRED), so a client
+// cannot ask for another container's secrets. The hook request carries a
+// container id, because it comes from the OCI pre-start hook, a trusted
+// privileged host-side injector the operator installs; it has no peer container
+// identity of its own, so it presents the id of the container it is populating
+// and the daemon validates that id has berm labels before it resolves anything.
+// See docs/PROTOCOL.md for the full contrast.
 const (
 	// msgFetchRequest is the client's request for its bundle. The request
 	// carries no body: the daemon derives the caller's identity from the peer
@@ -48,6 +61,14 @@ const (
 	// msgErrorResponse is the daemon's failure reply, carrying a short scrubbed
 	// reason and never a secret value.
 	msgErrorResponse byte = 3
+
+	// msgHookRequest is the OCI pre-start hook's request for a container's file
+	// bundle. It carries the OCI container id the hook read from the runtime
+	// state on stdin. The daemon inspects that id, confirms it is berm-enabled,
+	// resolves its plan, and returns its files only (env is refused in hook
+	// mode). The id is presented by a trusted injector, not proven by peer
+	// credentials, so the daemon validates it rather than trusting it blindly.
+	msgHookRequest byte = 4
 )
 
 // File is one secret file in a bundle: where it lands on the container tmpfs,

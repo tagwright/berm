@@ -24,6 +24,20 @@ import (
 // larger than any real secret file yet small enough to be a safe ceiling.
 const maxField = 64 << 20 // 64 MiB
 
+// RequestType classifies a request frame the daemon read the header of. The
+// daemon dispatches on it: a fetch request runs the peer-authenticated client
+// path, a hook request runs the trusted-injector hook path.
+type RequestType int
+
+const (
+	// RequestFetch is a client fetch request. It carries no body.
+	RequestFetch RequestType = iota
+
+	// RequestHook is an OCI pre-start hook request. Its body is a container id,
+	// read next with ReadHookBody.
+	RequestHook
+)
+
 // WriteRequest writes a fetch request onto w. The client calls it after
 // connecting. It carries no body.
 func WriteRequest(w io.Writer) error {
@@ -33,22 +47,85 @@ func WriteRequest(w io.Writer) error {
 	return nil
 }
 
-// ReadRequest reads and validates a fetch request from r. The daemon calls it
-// after accepting a connection and authenticating the peer. It returns an error
-// on a version mismatch or an unexpected message type, so a stale client fails
-// loudly.
-func ReadRequest(r io.Reader) error {
+// WriteHookRequest writes a hook request onto w carrying the OCI container id.
+// The hook binary calls it after connecting: unlike the client, the hook has no
+// peer container identity of its own, so it presents the id of the container it
+// is populating and the daemon validates it.
+func WriteHookRequest(w io.Writer, containerID string) error {
+	if containerID == "" {
+		return fmt.Errorf("wire: hook request needs a container id")
+	}
+	if _, err := w.Write([]byte{ProtocolVersion, msgHookRequest}); err != nil {
+		return fmt.Errorf("wire: write hook request header: %w", err)
+	}
+	return writeU16Bytes(w, []byte(containerID))
+}
+
+// ReadRequestHeader reads and validates the two-byte frame header from r and
+// returns which request type it is. The daemon calls it first on an accepted
+// connection, then dispatches: RequestFetch runs the peer-auth path (no more
+// bytes to read), RequestHook is followed by ReadHookBody for the container id.
+// A version mismatch or an unrecognized type is a hard, loud error.
+func ReadRequestHeader(r io.Reader) (RequestType, error) {
 	var hdr [2]byte
 	if _, err := io.ReadFull(r, hdr[:]); err != nil {
-		return fmt.Errorf("wire: read request header: %w", err)
+		return 0, fmt.Errorf("wire: read request header: %w", err)
 	}
 	if hdr[0] != ProtocolVersion {
-		return fmt.Errorf("wire: request protocol version %d, want %d", hdr[0], ProtocolVersion)
+		return 0, fmt.Errorf("wire: request protocol version %d, want %d", hdr[0], ProtocolVersion)
 	}
-	if hdr[1] != msgFetchRequest {
-		return fmt.Errorf("wire: request message type %d, want fetch", hdr[1])
+	switch hdr[1] {
+	case msgFetchRequest:
+		return RequestFetch, nil
+	case msgHookRequest:
+		return RequestHook, nil
+	default:
+		return 0, fmt.Errorf("wire: request message type %d is not recognized", hdr[1])
+	}
+}
+
+// ReadHookBody reads the container id that follows a hook request header. The
+// daemon calls it after ReadRequestHeader returns RequestHook. The id is a
+// length-prefixed byte string bounded by the u16 field cap.
+func ReadHookBody(r io.Reader) (string, error) {
+	id, err := readU16String(r)
+	if err != nil {
+		return "", fmt.Errorf("wire: read hook container id: %w", err)
+	}
+	if id == "" {
+		return "", fmt.Errorf("wire: hook request carried an empty container id")
+	}
+	return id, nil
+}
+
+// ReadRequest reads and validates a fetch request from r. It is the fetch-only
+// convenience retained for the client path and its tests: it fails on any
+// non-fetch request. The daemon's dispatch loop uses ReadRequestHeader instead,
+// so it can accept both request types.
+func ReadRequest(r io.Reader) error {
+	rt, err := ReadRequestHeader(r)
+	if err != nil {
+		return err
+	}
+	if rt != RequestFetch {
+		return fmt.Errorf("wire: request is not a fetch request")
 	}
 	return nil
+}
+
+// ReadHookRequest reads and validates a whole hook request from r (header and
+// body) and returns the container id. It is the symmetric counterpart to
+// WriteHookRequest for direct use and tests; the daemon loop uses
+// ReadRequestHeader plus ReadHookBody so it can dispatch on the type first.
+func ReadHookRequest(r io.Reader) (string, error) {
+	rt, err := ReadRequestHeader(r)
+	if err != nil {
+		return "", err
+	}
+	if rt != RequestHook {
+		return "", fmt.Errorf("wire: request is not a hook request")
+	}
+	return ReadHookBody(r)
 }
 
 // WriteError writes an error response frame onto w carrying a short reason. The
