@@ -18,6 +18,8 @@ package delivery
 import (
 	"context"
 	"errors"
+
+	"github.com/tagwright/berm/internal/backend"
 )
 
 // ErrNotImplemented is returned by a mechanism method that is not wired up yet.
@@ -60,10 +62,34 @@ func EnvAllowed(m Mechanism) bool {
 	return m == MechClient
 }
 
-// FileTarget is one resolved file delivery: where the plaintext lands and with
-// what ownership. It carries no secret value. The bytes are pulled from the
-// backend at delivery time and streamed to Path, never held in the Plan.
+// FileTarget is one resolved file delivery: what to read and where the
+// plaintext lands, with what ownership. It carries no secret value. The bytes
+// are pulled from the backend at delivery time and streamed to Path (hook and
+// volume) or serialized into the caller's bundle (client), never held in the
+// Plan.
+//
+// This mirrors resolve.FileBinding. resolve is the policy layer (it validates
+// labels against berm.yml and scopes to the caller); delivery is the execution
+// layer (it decrypts and lands the bytes). resolve.Plan.ToDelivery is the one
+// adapter that translates the resolved bindings into these execution targets,
+// which is why delivery need not import resolve and there is no import cycle.
 type FileTarget struct {
+	// Name is the delivery name from berm.file.<name>.*.
+	Name string
+
+	// Source is the resolved source to read from.
+	Source string
+
+	// Format is the source's declared format.
+	Format backend.SourceFormat
+
+	// Whole is true for a binary whole-payload delivery; when false Key names
+	// the dotenv key.
+	Whole bool
+
+	// Key is the dotenv key to read. Empty when Whole.
+	Key string
+
 	// Path is the absolute, tmpfs-backed destination.
 	Path string
 
@@ -72,13 +98,61 @@ type FileTarget struct {
 
 	// Mode is an octal string, e.g. "0400".
 	Mode string
+
+	// PointerVar is the non-secret <KEY>_FILE pointer env var to auto-set to
+	// Path, or empty. In client mode it becomes a Pointer in the bundle; in
+	// file-only modes it is recorded in the manifest for the app to read. Its
+	// value is a path, not a secret.
+	PointerVar string
 }
 
-// EnvTarget is one resolved env delivery: the variable name to set. It carries
-// no secret value. Legal only on a mechanism where EnvAllowed is true.
+// EnvTarget is one resolved env delivery: the variable to set and what to read
+// for it. It carries no secret value. Legal only on a mechanism where
+// EnvAllowed is true.
 type EnvTarget struct {
-	// Var is the environment variable name to set at exec.
+	// Var is the environment variable name to set at exec. Empty when All.
 	Var string
+
+	// Source is the resolved source to read from.
+	Source string
+
+	// Key is the dotenv key to read. Empty when All.
+	Key string
+
+	// All expands to every key of Source, each set as an env var named for its
+	// key. Legal only on the caller's own owned default source.
+	All bool
+}
+
+// RenderKind is which whole-source render shape a RenderTarget is.
+type RenderKind string
+
+const (
+	// RenderDotenv renders the whole default source as one dotenv file.
+	RenderDotenv RenderKind = "dotenv"
+
+	// RenderEnvdir renders the whole default source key-per-file, the s6-overlay
+	// container_environment style.
+	RenderEnvdir RenderKind = "envdir"
+)
+
+// RenderTarget is one resolved whole-source render (berm.dotenv, berm.envdir).
+// Both shapes are file-mode and operate on the default source only.
+type RenderTarget struct {
+	// Kind is dotenv or envdir.
+	Kind RenderKind
+
+	// Source is the default source being rendered.
+	Source string
+
+	// Path is the absolute target (a file for dotenv, a directory for envdir).
+	Path string
+
+	// Owner is uid[:gid], numeric only.
+	Owner string
+
+	// Mode is an octal string.
+	Mode string
 }
 
 // Plan is the resolved set of deliveries for one container, produced by the
@@ -90,6 +164,9 @@ type Plan struct {
 	// Container is the target container ID.
 	Container string
 
+	// Service is the resolved service identity the plan was scoped against.
+	Service string
+
 	// Mechanism is the delivery mechanism resolved for this container.
 	Mechanism Mechanism
 
@@ -100,6 +177,13 @@ type Plan struct {
 	// EnvAllowed(Mechanism) is true; otherwise the resolver rejects the Plan
 	// with ErrEnvUnsupported before it reaches a Delivery.
 	Env []EnvTarget
+
+	// Renders are the whole-source renders (berm.dotenv, berm.envdir).
+	Renders []RenderTarget
+
+	// EnvExposure is set when the plan delivers any env, so berm status can
+	// surface the one-time honesty warning.
+	EnvExposure bool
 }
 
 // Delivery executes resolved Plans by one mechanism. Implementations live in
