@@ -14,15 +14,8 @@
 package label
 
 import (
-	"errors"
-
-	"github.com/tagwright/core/runtime"
-
 	"github.com/tagwright/berm/internal/delivery"
 )
-
-// ErrNotImplemented is returned by the not-yet-wired parser.
-var ErrNotImplemented = errors.New("label: not implemented")
 
 // Recognized label prefixes. The reader strips whichever matches, then parses
 // one canonical suffix grammar. The same suffix under both prefixes with
@@ -155,11 +148,4 @@ type ContainerSpec struct {
 	// Mode is the container-level default mode (berm.mode) for every file
 	// delivery.
 	Mode string
-}
-
-// Parse turns one container's labels into a ContainerSpec. Stubbed until the
-// label-parsing chunk. It takes a core runtime.Container because service
-// identity keys off the compose service label the runtime already normalizes.
-func Parse(_ runtime.Container) (ContainerSpec, error) {
-	return ContainerSpec{}, ErrNotImplemented
 }
