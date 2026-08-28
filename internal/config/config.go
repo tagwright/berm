@@ -89,6 +89,16 @@ type Globals struct {
 	// DigestSchedule is BERM_DIGEST_SCHEDULE: the digest cadence, default
 	// DefaultDigestSchedule.
 	DigestSchedule string
+
+	// Runtime is BERM_RUNTIME: which container runtime to drive, "docker" or
+	// "podman". Empty means docker. It also decides the per-runtime default
+	// delivery mechanism when BERM_DEFAULT_DELIVERY is unset (docker client,
+	// podman hook).
+	Runtime string
+
+	// Socket is BERM_SOCKET: the container runtime socket path. Empty lets the
+	// daemon fall back to the runtime's conventional socket.
+	Socket string
 }
 
 // Config is a parsed berm.yml plus the loaded BERM_* globals.
@@ -136,6 +146,8 @@ func loadGlobals() Globals {
 		ClientTimeout:   DefaultClientTimeout,
 		StaleDigest:     boolEnv("BERM_STALE_DIGEST"),
 		DigestSchedule:  DefaultDigestSchedule,
+		Runtime:         os.Getenv("BERM_RUNTIME"),
+		Socket:          os.Getenv("BERM_SOCKET"),
 	}
 
 	if v := os.Getenv("BERM_CLIENT_TIMEOUT"); v != "" {
