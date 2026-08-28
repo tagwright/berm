@@ -72,11 +72,34 @@ func run(args []string) int {
 	}
 	defer bundle.Destroy()
 
-	if err := hook.WriteIntoMountNS(bundle, state.PID, manifestPath(), requireTmpfs()); err != nil {
+	if err := inject(bundle, state, manifestPath(), requireTmpfs()); err != nil {
 		fmt.Fprintf(os.Stderr, "berm-hook: inject into %s: %v\n", state.ID, err)
 		return 1
 	}
 	return 0
+}
+
+// inject writes the bundle into the container's own mount namespace before PID 1,
+// selecting the path by the OCI hook stage shape the state describes:
+//
+//   - A host-side stage (prestart, or createRuntime on a runtime whose mounts are
+//     ready by then) hands a valid container pid in the runtime's namespace. Enter
+//     that mount namespace by pid via WriteIntoMountNS.
+//   - The createContainer stage berm ships (see deploy/hook/hooks.d) runs the hook
+//     INSIDE the container's mount namespace already, so the state carries a zero
+//     pid. The mounts (the tmpfs) exist but pivot_root has not run, so the tmpfs
+//     paths live under the container rootfs: write there with WriteFilesUnderRoot,
+//     no setns. This is the path proven live against crun/Podman; createRuntime
+//     fired before the container tmpfs existed and could not land the secret.
+func inject(bundle *wire.Bundle, state hook.State, manifestPath string, requireTmpfs bool) error {
+	if state.PID > 0 {
+		return hook.WriteIntoMountNS(bundle, state.PID, manifestPath, requireTmpfs)
+	}
+	root, err := hook.ContainerRoot(state)
+	if err != nil {
+		return err
+	}
+	return hook.WriteFilesUnderRoot(bundle, root, manifestPath, requireTmpfs)
 }
 
 func socket() string {

@@ -29,18 +29,37 @@ sudo install -D -m 0644 hooks.d/berm-hook.json \
   /etc/containers/oci/hooks.d/berm-hook.json
 ```
 
+Then make sure Podman actually scans that directory. On current Podman
+(verified against 5.8) the built-in `hooks_dir` default does not reliably
+include `/etc/containers/oci/hooks.d`, so set it explicitly in
+`containers.conf`:
+
+```sh
+sudo mkdir -p /etc/containers
+printf '[engine]\nhooks_dir = ["/etc/containers/oci/hooks.d"]\n' \
+  | sudo tee -a /etc/containers/containers.conf
+```
+
 The `when.annotations` match fires the hook only for containers carrying the
-`berm.enable=true` annotation, and the `createRuntime` stage runs it after the
-runtime namespaces exist but before the container process starts, which is when
-`berm-hook` writes into `/proc/<pid>/root` in the container's mount namespace.
-Under Podman a container label surfaces as an OCI annotation of the same key, so
-a `berm.enable: "true"` label (compose) or `--annotation berm.enable=true`
-(`podman run`) both trigger it. The keys and values in `when.annotations` are
-regexes, hence the `^...$` anchors.
+`berm.enable=true` OCI **annotation**, and the `createContainer` stage runs the
+hook inside the container's own mount namespace after the container's mounts (the
+tmpfs the secret lands on) are set up but before `pivot_root` and before PID 1,
+which is when `berm-hook` writes the secret files under the container rootfs the
+OCI state names. The keys and values in `when.annotations` are regexes, hence the
+`^...$` anchors.
+
+The trigger is an OCI **annotation**, not a label: on current Podman a container
+label is NOT surfaced as an OCI annotation, so set the trigger with
+`--annotation berm.enable=true` (`podman run`) or the compose `annotations:`
+block. The berm **labels** the daemon reads for delivery (`berm.enable`,
+`berm.name`, `berm.file.*`, and so on) are separate and set as labels as usual, so
+a hook-mode container carries `berm.enable` in both places: as an annotation for
+the trigger and as a label (with the rest of the `berm.*` config) for the daemon.
 
 The hook connects to the daemon at its default socket `/run/berm/berm.sock`,
 which the daemon service below binds to a host path, so the host-side hook can
-reach it. No hook env is needed.
+reach it (at the createContainer stage the hook's `/` is still the host root, so
+this host path resolves). No hook env is needed.
 
 ## The daemon service
 

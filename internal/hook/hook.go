@@ -24,13 +24,29 @@
 // underlying rootfs (where a host-side rootfs write would leave plaintext on
 // persistent disk, breaking the contract).
 //
-// What is proven now vs later. ParseState and WriteFilesUnderRoot are unit
-// tested here against a sample OCI state and a real /dev/shm tmpfs. The
-// setns-into-a-live-container step in WriteIntoMountNS is factored apart from the
-// byte-writing so the write logic is tested without a live container; the setns
-// path itself is proven in the later nested-podman integration phase (there is
-// no Podman on the build host), and its fail-closed behavior on a bad pid is the
-// only part asserted here.
+// Stage and write path. berm installs the hook at the OCI createContainer stage
+// (see deploy/hook/hooks.d). At that stage the runtime has already run the hook
+// INSIDE the container's own mount namespace and set up the container's mounts
+// (the tmpfs the secret must land on), but has not yet pivot_root'd, so "/" is
+// still the runtime's root and the container's tmpfs paths live UNDER the
+// container rootfs. The OCI state at that stage carries a zero pid (the hook is
+// already in the namespace, there is nothing to setns into) and the container
+// rootfs path, so the write goes through WriteFilesUnderRoot with that rootfs as
+// the prefix. This was verified empirically against crun 1.28 / Podman 5.8 in
+// the nested-podman integration phase: the earlier createRuntime staging fired
+// host-side BEFORE the container mounts existed, so the write could not land on
+// the container tmpfs at all, which the integration pass caught and fixed.
+//
+// WriteIntoMountNS (the setns path) remains for a host-side stage that hands a
+// valid container pid in the runtime's namespace (prestart on some runtimes):
+// there the hook enters the container's mount namespace by pid. cmd/berm-hook
+// selects between the two by whether the state carries a pid.
+//
+// What is proven now vs later. ParseState, ContainerRoot, and WriteFilesUnderRoot
+// are unit tested here against a sample OCI state and a real /dev/shm tmpfs. The
+// createContainer rootfs-prefixed write is proven end to end against a live
+// Podman in the nested-podman integration phase (test/integration/run-podman.sh).
+// WriteIntoMountNS's fail-closed behavior on a bad pid is asserted here.
 package hook
 
 import (
@@ -39,6 +55,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"path/filepath"
 	"runtime"
 	"time"
@@ -63,11 +80,18 @@ const DefaultTimeout = 30 * time.Second
 // runtime's pid namespace, which for a root hook is the host), the bundle path,
 // and the container's annotations.
 type State struct {
-	OCIVersion  string            `json:"ociVersion"`
-	ID          string            `json:"id"`
-	Status      string            `json:"status"`
-	PID         int               `json:"pid"`
-	Bundle      string            `json:"bundle"`
+	OCIVersion string `json:"ociVersion"`
+	ID         string `json:"id"`
+	Status     string `json:"status"`
+	PID        int    `json:"pid"`
+	Bundle     string `json:"bundle"`
+	// Root is the container's root filesystem path. It is a crun/runc extension
+	// to the OCI state (not in the base State schema) that the createContainer
+	// stage relies on: at that stage the hook runs inside the container's mount
+	// namespace before pivot_root, so the container's tmpfs paths live under this
+	// root. When a runtime omits it, ContainerRoot falls back to the bundle's
+	// config.json.
+	Root        string            `json:"root,omitempty"`
 	Annotations map[string]string `json:"annotations,omitempty"`
 }
 
@@ -83,6 +107,44 @@ func ParseState(r io.Reader) (State, error) {
 		return State{}, fmt.Errorf("hook: OCI state carried no container id")
 	}
 	return s, nil
+}
+
+// ContainerRoot resolves the container's root filesystem path from the OCI
+// state, for the createContainer stage where the hook runs inside the
+// container's own mount namespace but before pivot_root: there the container's
+// tmpfs paths live under this root rather than at "/". It prefers the state's
+// own root field (crun and runc set it), and falls back to reading root.path
+// from the bundle's config.json (resolved relative to the bundle when relative)
+// for a runtime that does not populate state.root. It fails closed: a state that
+// carries neither a root nor a usable bundle config is an error, never a guessed
+// "/".
+func ContainerRoot(s State) (string, error) {
+	if s.Root != "" {
+		return s.Root, nil
+	}
+	if s.Bundle == "" {
+		return "", fmt.Errorf("hook: OCI state carried neither a root nor a bundle path")
+	}
+	cfgPath := filepath.Join(s.Bundle, "config.json")
+	data, err := os.ReadFile(cfgPath)
+	if err != nil {
+		return "", fmt.Errorf("hook: read %s for container root: %w", cfgPath, err)
+	}
+	var cfg struct {
+		Root struct {
+			Path string `json:"path"`
+		} `json:"root"`
+	}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return "", fmt.Errorf("hook: parse %s for container root: %w", cfgPath, err)
+	}
+	if cfg.Root.Path == "" {
+		return "", fmt.Errorf("hook: %s carried no root.path", cfgPath)
+	}
+	if filepath.IsAbs(cfg.Root.Path) {
+		return cfg.Root.Path, nil
+	}
+	return filepath.Join(s.Bundle, cfg.Root.Path), nil
 }
 
 // Fetch dials the daemon at sockPath and requests the file bundle for

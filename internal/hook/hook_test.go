@@ -123,6 +123,111 @@ func TestWriteFilesUnderRoot(t *testing.T) {
 	}
 }
 
+// createContainerState is the OCI state a runtime pipes to a createContainer
+// hook: it runs inside the container's own mount namespace before pivot_root, so
+// the pid is 0 (nothing to setns into) and the container root filesystem path is
+// carried in the root field. This is the stage berm ships. Regression for the
+// integration-found bug where the shipped createRuntime stage fired host-side
+// before the container tmpfs existed and could not land the secret.
+const createContainerState = `{
+  "ociVersion": "1.0.2",
+  "id": "3f1a2b9c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8",
+  "status": "created",
+  "pid": 0,
+  "root": "/var/lib/containers/storage/overlay/abc123/merged",
+  "bundle": "/var/lib/containers/storage/overlay-containers/3f1a2b9c/userdata",
+  "annotations": { "berm.enable": "true" }
+}`
+
+func TestParseStateReadsRootField(t *testing.T) {
+	s, err := ParseState(strings.NewReader(createContainerState))
+	if err != nil {
+		t.Fatalf("ParseState: %v", err)
+	}
+	if s.PID != 0 {
+		t.Errorf("pid = %d, want 0 for a createContainer state", s.PID)
+	}
+	if s.Root != "/var/lib/containers/storage/overlay/abc123/merged" {
+		t.Errorf("root = %q", s.Root)
+	}
+}
+
+func TestContainerRootPrefersStateRoot(t *testing.T) {
+	root, err := ContainerRoot(State{Root: "/some/merged", Bundle: "/ignored"})
+	if err != nil {
+		t.Fatalf("ContainerRoot: %v", err)
+	}
+	if root != "/some/merged" {
+		t.Errorf("root = %q, want /some/merged", root)
+	}
+}
+
+func TestContainerRootFallsBackToConfigJSON(t *testing.T) {
+	// A runtime that omits state.root: resolve root.path from the bundle's
+	// config.json. Cover both an absolute root.path and a relative one (resolved
+	// against the bundle).
+	for _, tc := range []struct {
+		name     string
+		rootPath string
+		want     func(bundle string) string
+	}{
+		{"absolute", "/abs/merged", func(string) string { return "/abs/merged" }},
+		{"relative", "rootfs", func(bundle string) string { return filepath.Join(bundle, "rootfs") }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bundle := t.TempDir()
+			cfg := `{"ociVersion":"1.0.2","root":{"path":"` + tc.rootPath + `"}}`
+			if err := os.WriteFile(filepath.Join(bundle, "config.json"), []byte(cfg), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			got, err := ContainerRoot(State{Bundle: bundle})
+			if err != nil {
+				t.Fatalf("ContainerRoot: %v", err)
+			}
+			if got != tc.want(bundle) {
+				t.Errorf("root = %q, want %q", got, tc.want(bundle))
+			}
+		})
+	}
+}
+
+func TestContainerRootFailsClosed(t *testing.T) {
+	// No root and no bundle: fail closed, never a guessed "/".
+	if _, err := ContainerRoot(State{}); err == nil {
+		t.Fatal("expected an error for a state with neither root nor bundle")
+	}
+	// A bundle with no config.json: fail closed.
+	if _, err := ContainerRoot(State{Bundle: t.TempDir()}); err == nil {
+		t.Fatal("expected an error for a bundle with no config.json")
+	}
+}
+
+// TestWriteFilesUnderRootWithMergedRootPrefix proves the createContainer write
+// path: the bundle's container-absolute paths land under the container rootfs
+// prefix, exactly as the hook does when state.root is the merged rootfs. This is
+// the byte-writing core the live nested-podman run exercises for real.
+func TestWriteFilesUnderRootWithMergedRootPrefix(t *testing.T) {
+	root, req := tmpfsTestDir(t)
+	// Simulate a merged-rootfs prefix under the tmpfs dir.
+	merged := filepath.Join(root, "merged")
+	if err := os.MkdirAll(merged, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	b := knownFileBundle()
+	defer b.Destroy()
+
+	if err := WriteFilesUnderRoot(b, merged, wire.DefaultManifestPath, req); err != nil {
+		t.Fatalf("WriteFilesUnderRoot: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(merged, "run/berm/pgpass"))
+	if err != nil {
+		t.Fatalf("read pgpass under merged root: %v", err)
+	}
+	if !bytes.Equal(got, []byte("p=ss w0rd!")) {
+		t.Errorf("pgpass = %q", got)
+	}
+}
+
 // TestWriteIntoMountNSFailsClosed proves the setns path fails closed on a bad
 // pid rather than writing anywhere. It does NOT fake a live-Podman result: the
 // real setns-into-a-live-container write is proven in the nested-podman

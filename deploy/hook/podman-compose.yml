@@ -35,17 +35,29 @@ services:
       BERM_DEFAULT_DELIVERY: hook
     restart: unless-stopped
 
-  # An example app. The image is untouched. The hook writes POSTGRES_PASSWORD
-  # into /run/berm/pgpass inside this container's mount namespace before postgres
-  # starts, and the auto-set POSTGRES_PASSWORD_FILE pointer makes postgres read it.
+  # An example app. The image is untouched. The hook writes the secret into
+  # /run/berm/pgpass inside this container's mount namespace before postgres
+  # starts. Note that hook mode is files only: it cannot set an env var, so
+  # point postgres at the file explicitly with POSTGRES_PASSWORD_FILE (the
+  # auto-set _FILE pointer is an env var and so is not available in hook mode).
+  #
+  # berm.enable is set TWICE on purpose: as an OCI annotation (the hook trigger,
+  # since a label is not surfaced as an annotation on current Podman) and as a
+  # label alongside the rest of the berm.* config (what the daemon reads to
+  # resolve and deliver). The app image itself is still unchanged.
   example-app:
     image: docker.io/library/postgres:16
     annotations:
-      # Podman surfaces labels as annotations. Either the annotation here or a
-      # berm.enable label triggers the hook.
       berm.enable: "true"
+    labels:
+      berm.enable: "true"
+      berm.name: "example-app"
       berm.delivery: "hook"
       berm.file.pgpass.from: "POSTGRES_PASSWORD"
+    environment:
+      POSTGRES_PASSWORD_FILE: /run/berm/pgpass
+    tmpfs:
+      - /run/berm
     depends_on:
       - berm
 
