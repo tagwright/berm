@@ -8,21 +8,24 @@ on:
     branches: [main]
 
 jobs:
-  # Build, vet, and the unit tests. GOPRIVATE lets the build fetch tagwright's
-  # own modules (core, beacon) directly rather than through the public proxy.
-  # go.sum still verifies them.
+  # Build, vet, and the unit tests. The job runs inside the golang:1.25 image as
+  # root, which is the environment berm actually runs in: delivering a secret
+  # chowns the file to its declared numeric owner (a core security behavior), and
+  # chown to another uid needs CAP_CHOWN, which an unprivileged runner lacks. Root
+  # in the toolchain image is also how every build was verified. GOPRIVATE lets
+  # the build fetch tagwright's own modules (core, beacon) directly rather than
+  # through the public proxy. go.sum still verifies them.
   build:
     runs-on: ubuntu-latest
+    container: golang:1.25
     env:
       GOPRIVATE: github.com/tagwright/*
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.25'
+      - name: Trust the workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: Build
         run: go build ./...
@@ -38,9 +41,13 @@ jobs:
   # would silently skip every //go:build integration file). This job installs the
   # SAME pinned sops and age the daemon image bundles, then runs the tagged suite,
   # so the end-to-end decrypt-and-deliver path is exercised on every push and PR
-  # and is never silently skipped.
+  # and is never silently skipped. It also runs as root in the toolchain image for
+  # the same chown reason as the unit job. The live-container harness under
+  # test/integration/ is driven by run.sh / run-podman.sh against a real host, not
+  # by go test, so it deliberately does not run here.
   integration:
     runs-on: ubuntu-latest
+    container: golang:1.25
     env:
       GOPRIVATE: github.com/tagwright/*
       SOPS_VERSION: 3.9.4
@@ -51,17 +58,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.25'
+      - name: Trust the workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: Install pinned sops
         run: |
           curl -fsSL -o /tmp/sops \
             "https://github.com/getsops/sops/releases/download/v${SOPS_VERSION}/sops-v${SOPS_VERSION}.linux.amd64"
           echo "${SOPS_SHA256}  /tmp/sops" | sha256sum -c -
-          sudo install -m 0755 /tmp/sops /usr/local/bin/sops
+          install -m 0755 /tmp/sops /usr/local/bin/sops
           sops --version
 
       - name: Install pinned age (provides age and age-keygen)
@@ -70,8 +75,8 @@ jobs:
             "https://github.com/FiloSottile/age/releases/download/v${AGE_VERSION}/age-v${AGE_VERSION}-linux-amd64.tar.gz"
           echo "${AGE_SHA256}  /tmp/age.tar.gz" | sha256sum -c -
           tar -xzf /tmp/age.tar.gz -C /tmp
-          sudo install -m 0755 /tmp/age/age /usr/local/bin/age
-          sudo install -m 0755 /tmp/age/age-keygen /usr/local/bin/age-keygen
+          install -m 0755 /tmp/age/age /usr/local/bin/age
+          install -m 0755 /tmp/age/age-keygen /usr/local/bin/age-keygen
           age-keygen --version
 
       - name: Integration tests
