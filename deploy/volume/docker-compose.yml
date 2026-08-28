@@ -26,10 +26,12 @@ services:
       - ./secrets/age:/run/berm/age:ro
       - berm-sock:/run/berm-sock
       - berm-state:/var/lib/berm
-      # The daemon mounts each app's berm-<service> tmpfs volume so it can write
-      # the secret and the manifest into the volume the app reads. Here the
-      # example-app volume "berm-example-app" is mounted daemon-side.
-      - berm-example-app:/run/berm-volumes/example-app
+      # The daemon mounts each app's tmpfs volume so it can write the secret and
+      # the manifest into the volume the app reads. The daemon-side path MUST be
+      # <volume-mount-root>/<berm.volume>, i.e. /run/berm/volumes/<berm.volume>:
+      # the daemon writes to that exact path, so a mismatch leaves the app
+      # unpopulated and the waiter blocked. Here berm.volume is "berm-example-app".
+      - berm-example-app:/run/berm/volumes/berm-example-app
     environment:
       BERM_SOURCES_ROOT: /var/lib/berm/sources
       BERM_DEFAULT_DELIVERY: volume
