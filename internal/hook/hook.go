@@ -11,9 +11,14 @@
 // Trust model, distinct from the client. The hook is a trusted, privileged
 // host-side component the operator installs via Podman's hooks_dir. It runs as
 // root and has no peer container identity of its own, so it presents the OCI
-// container id from the state JSON to the daemon, which validates that id has
-// berm labels before it resolves anything. Contrast the client, which sends no
-// id and is authenticated by the kernel-attested peer credentials of the socket.
+// container id AND the container's OCI annotations (its berm.* config) from the
+// state JSON to the daemon. The daemon resolves from those presented annotations
+// rather than inspecting the container over the runtime API, because the
+// pre-start hook fires while the runtime holds the container-creation lock and a
+// daemon Inspect would deadlock against the create the hook is blocking. The
+// daemon still validates the presented config against berm.yml before resolving.
+// Contrast the client, which sends no id and is authenticated by the
+// kernel-attested peer credentials of the socket.
 //
 // Security contract. Files only: env is refused end to end in hook mode (the
 // daemon never puts env in a hook bundle). The write goes through the shared
@@ -148,10 +153,13 @@ func ContainerRoot(s State) (string, error) {
 }
 
 // Fetch dials the daemon at sockPath and requests the file bundle for
-// containerID over the hook-request protocol. The whole exchange is bounded by
-// timeout. The returned bundle holds secret bytes in locked memory; the caller
-// MUST Destroy it.
-func Fetch(ctx context.Context, sockPath, containerID string, timeout time.Duration) (*wire.Bundle, error) {
+// containerID over the hook-request protocol, presenting the container's OCI
+// annotations so the daemon resolves the plan from them rather than inspecting
+// the container over the runtime API (which would deadlock against the create
+// the pre-start hook is blocking). The whole exchange is bounded by timeout. The
+// returned bundle holds secret bytes in locked memory; the caller MUST Destroy
+// it.
+func Fetch(ctx context.Context, sockPath, containerID string, annotations map[string]string, timeout time.Duration) (*wire.Bundle, error) {
 	deadline := time.Now().Add(timeout)
 	d := net.Dialer{Deadline: deadline}
 	conn, err := d.DialContext(ctx, "unix", sockPath)
@@ -162,7 +170,7 @@ func Fetch(ctx context.Context, sockPath, containerID string, timeout time.Durat
 	if err := conn.SetDeadline(deadline); err != nil {
 		return nil, fmt.Errorf("hook: set deadline: %w", err)
 	}
-	if err := wire.WriteHookRequest(conn, containerID); err != nil {
+	if err := wire.WriteHookRequest(conn, containerID, annotations); err != nil {
 		return nil, err
 	}
 	bundle, err := wire.ReadResponse(conn)

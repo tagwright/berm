@@ -14,14 +14,21 @@ There are two request types, with two deliberately different trust models:
   its secrets. A client cannot ask for another container's secrets, because it
   presents no id at all: identity is proven by the kernel, not asserted by the
   client.
-- The **hook request** (hook mode) carries an OCI container id. It comes from the
-  OCI pre-start hook, a trusted, privileged host-side injector the operator
-  installs via Podman's `hooks_dir`. The hook has no peer container identity of
-  its own, so it presents the id of the container it is populating. The daemon
-  does not trust that id blindly: it inspects the container, confirms it is
-  berm-enabled, and resolves its labels before returning anything. Client =
-  kernel-attested peer identity; hook = trusted privileged injector presenting an
-  id the daemon then validates.
+- The **hook request** (hook mode) carries an OCI container id AND the
+  container's OCI annotations. It comes from the OCI pre-start hook, a trusted,
+  privileged host-side injector the operator installs via Podman's `hooks_dir`.
+  The hook has no peer container identity of its own, so it presents the id and
+  the container's own config annotations (the `berm.*` keys the runtime handed it
+  in the OCI state). The daemon resolves from those presented annotations rather
+  than inspecting the container over the runtime API: the pre-start hook fires
+  while the runtime holds the container-creation lock, so a daemon Inspect of that
+  same container would deadlock against the create the hook is blocking (this was
+  found live in the nested-podman integration pass). The daemon still validates
+  rather than delivers blindly: it derives the service identity, confirms the
+  container is berm-enabled, and resolves the presented config against `berm.yml`
+  (source existence, ref shape, owner-plus-grant scoping, files-only). Client =
+  kernel-attested peer identity; hook = trusted privileged injector presenting the
+  container's own config, which the daemon then validates against `berm.yml`.
 
 The protocol is implemented in `internal/wire`. It is length-prefixed and
 versioned so it can evolve without a silent misparse.
@@ -73,12 +80,23 @@ byte   version = 2
 byte   type    = 4
 u16    idLen
 bytes  containerID   (the OCI container id from the runtime state JSON)
+u16    nAnnotations
+repeat nAnnotations (keys sorted, so the frame is deterministic):
+    u16   keyLen;   bytes key
+    u16   valLen;   bytes value
 ```
 
-The container id is not a secret. The daemon inspects it, confirms the container
-is berm-enabled, resolves its plan, refuses any env (hook mode is files only),
-and returns its file bundle. A hook request for a container that is not
-berm-enabled, or whose resolved mechanism is not `hook`, is refused.
+Neither the container id nor the annotations are secret. The daemon resolves the
+plan from the presented annotations (the container's own `berm.*` config) WITHOUT
+inspecting the container over the runtime API, because the pre-start hook fires
+while the runtime holds the container-creation lock and a daemon Inspect of that
+same container would deadlock against the create the hook is blocking. The daemon
+derives the service identity from the annotations (`berm.name`, else a
+compose-service annotation; there is no container name to fall back on in hook
+mode), confirms the container is berm-enabled, resolves its plan, refuses any env
+(hook mode is files only), and returns its file bundle. A hook request for a
+container that is not berm-enabled, or whose resolved mechanism is not `hook`, is
+refused.
 
 ## Error response (type 3)
 
@@ -137,9 +155,10 @@ manifest instead of setting it.
   sets env, then `bundle.Destroy()` zeroizes every secret buffer (the exec form
   does this in the instant before `execve`).
 - Hook (`berm-hook`): parse the OCI state from stdin, `wire.WriteHookRequest`
-  with the container id, then `wire.ReadResponse`. It writes the bundle's files
-  into the container's mount namespace before PID 1 and `bundle.Destroy()`s. A
-  hook bundle carries files and a manifest only, never env.
+  with the container id and the state's annotations, then `wire.ReadResponse`. It
+  writes the bundle's files into the container's own mount namespace before PID 1
+  (under the container rootfs at the createContainer stage) and `bundle.Destroy()`s.
+  A hook bundle carries files and a manifest only, never env.
 
 ## Versioning
 

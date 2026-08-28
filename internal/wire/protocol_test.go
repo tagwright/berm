@@ -105,18 +105,31 @@ func TestProtocolVersionIsTwo(t *testing.T) {
 
 func TestHookRequestRoundTrip(t *testing.T) {
 	const id = "3f1a2b9c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8"
+	ann := map[string]string{
+		"berm.enable":           "true",
+		"berm.file.pgpass.from": "DB_PASSWORD",
+		"io.container.manager":  "libpod",
+	}
 	var buf bytes.Buffer
-	if err := WriteHookRequest(&buf, id); err != nil {
+	if err := WriteHookRequest(&buf, id, ann); err != nil {
 		t.Fatalf("WriteHookRequest: %v", err)
 	}
 
-	// Whole-request reader.
-	got, err := ReadHookRequest(bytes.NewReader(buf.Bytes()))
+	// Whole-request reader: id and annotations round-trip byte-for-byte.
+	got, gotAnn, err := ReadHookRequest(bytes.NewReader(buf.Bytes()))
 	if err != nil {
 		t.Fatalf("ReadHookRequest: %v", err)
 	}
 	if got != id {
 		t.Errorf("hook container id = %q, want %q", got, id)
+	}
+	if len(gotAnn) != len(ann) {
+		t.Fatalf("annotations = %v, want %v", gotAnn, ann)
+	}
+	for k, v := range ann {
+		if gotAnn[k] != v {
+			t.Errorf("annotation %q = %q, want %q", k, gotAnn[k], v)
+		}
 	}
 
 	// Header-then-body dispatch, the path the daemon loop uses.
@@ -128,18 +141,39 @@ func TestHookRequestRoundTrip(t *testing.T) {
 	if rt != RequestHook {
 		t.Fatalf("request type = %v, want RequestHook", rt)
 	}
-	body, err := ReadHookBody(r)
+	body, bodyAnn, err := ReadHookBody(r)
 	if err != nil {
 		t.Fatalf("ReadHookBody: %v", err)
 	}
 	if body != id {
 		t.Errorf("hook body id = %q, want %q", body, id)
 	}
+	if bodyAnn["berm.enable"] != "true" {
+		t.Errorf("body annotation berm.enable = %q, want true", bodyAnn["berm.enable"])
+	}
+}
+
+func TestHookRequestEmptyAnnotationsRoundTrip(t *testing.T) {
+	const id = "abc123"
+	var buf bytes.Buffer
+	if err := WriteHookRequest(&buf, id, nil); err != nil {
+		t.Fatalf("WriteHookRequest: %v", err)
+	}
+	got, gotAnn, err := ReadHookRequest(bytes.NewReader(buf.Bytes()))
+	if err != nil {
+		t.Fatalf("ReadHookRequest: %v", err)
+	}
+	if got != id {
+		t.Errorf("id = %q, want %q", got, id)
+	}
+	if gotAnn == nil || len(gotAnn) != 0 {
+		t.Errorf("annotations = %v, want a non-nil empty map", gotAnn)
+	}
 }
 
 func TestWriteHookRequestRejectsEmptyID(t *testing.T) {
 	var buf bytes.Buffer
-	if err := WriteHookRequest(&buf, ""); err == nil {
+	if err := WriteHookRequest(&buf, "", nil); err == nil {
 		t.Fatal("expected an error writing a hook request with no container id")
 	}
 }
@@ -159,7 +193,7 @@ func TestRequestHeaderDispatch(t *testing.T) {
 	}
 
 	var hookBuf bytes.Buffer
-	if err := WriteHookRequest(&hookBuf, "abc"); err != nil {
+	if err := WriteHookRequest(&hookBuf, "abc", nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := ReadRequest(bytes.NewReader(hookBuf.Bytes())); err == nil {

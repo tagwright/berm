@@ -11,36 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tagwright/core/runtime"
-
 	"github.com/tagwright/berm/internal/backend"
 	"github.com/tagwright/berm/internal/config"
 	"github.com/tagwright/berm/internal/delivery"
 )
-
-// --- fake runtime: only Inspect is live ------------------------------------
-
-type fakeRuntime struct {
-	inspect func(ctx context.Context, id string) (runtime.Container, error)
-}
-
-func (f *fakeRuntime) List(context.Context) ([]runtime.Container, error) {
-	return nil, runtime.ErrNotImplemented
-}
-func (f *fakeRuntime) Inspect(ctx context.Context, id string) (runtime.Container, error) {
-	return f.inspect(ctx, id)
-}
-func (f *fakeRuntime) Watch(context.Context) (<-chan runtime.Event, <-chan error) { return nil, nil }
-func (f *fakeRuntime) Exec(context.Context, string, runtime.ExecSpec) (*runtime.ExecHandle, error) {
-	return nil, runtime.ErrNotImplemented
-}
-func (f *fakeRuntime) Stop(context.Context, string, int) error    { return runtime.ErrNotImplemented }
-func (f *fakeRuntime) Start(context.Context, string) error        { return runtime.ErrNotImplemented }
-func (f *fakeRuntime) Kill(context.Context, string, string) error { return runtime.ErrNotImplemented }
-func (f *fakeRuntime) Restart(context.Context, string) error      { return runtime.ErrNotImplemented }
-func (f *fakeRuntime) Close() error                               { return nil }
-
-var _ runtime.Runtime = (*fakeRuntime)(nil)
 
 // --- fake opener over one in-memory dotenv source --------------------------
 
@@ -89,30 +63,28 @@ func testConfig() *config.Config {
 	}
 }
 
-func newHandler(inspect func(ctx context.Context, id string) (runtime.Container, error)) *Handler {
-	return NewHandler(&fakeRuntime{inspect: inspect}, testConfig(), fakeOpener{}, delivery.MechHook)
+// The daemon default delivery in these tests is hook, matching a Podman daemon.
+func newHandler() *Handler {
+	return NewHandler(testConfig(), fakeOpener{}, delivery.MechHook)
 }
 
 const cid = "3f1a2b9c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8"
 
-func TestHandleReturnsFileBundle(t *testing.T) {
-	h := newHandler(func(_ context.Context, id string) (runtime.Container, error) {
-		if id != cid {
-			t.Fatalf("inspect id = %q, want %q", id, cid)
-		}
-		return runtime.Container{
-			ID:      cid,
-			Name:    "myproj-webapp-1",
-			Service: "webapp",
-			Labels: map[string]string{
-				"berm.enable":           "true",
-				"berm.file.pgpass.from": "DB_PASSWORD",
-				// No berm.delivery: falls to the daemon default, hook.
-			},
-		}, nil
-	})
+// TestHandleResolvesFromPresentedAnnotations proves the deadlock-fix contract:
+// the handler builds the bundle purely from the OCI annotations the hook
+// presented, with NO runtime inspect (the handler holds no runtime at all).
+func TestHandleResolvesFromPresentedAnnotations(t *testing.T) {
+	h := newHandler()
+	ann := map[string]string{
+		"berm.enable":           "true",
+		"berm.name":             "webapp",
+		"berm.file.pgpass.from": "DB_PASSWORD",
+		// No berm.delivery: falls to the daemon default, hook.
+		// A stray non-berm annotation must be ignored, not an error.
+		"io.container.manager": "libpod",
+	}
 
-	b, err := h.Handle(context.Background(), cid, time.Unix(1_700_000_000, 0))
+	b, err := h.Handle(context.Background(), cid, ann, time.Unix(1_700_000_000, 0))
 	if err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
@@ -127,11 +99,9 @@ func TestHandleReturnsFileBundle(t *testing.T) {
 	if !bytes.Equal(b.Files[0].Data, []byte("p=ss w0rd!")) {
 		t.Errorf("file data = %q", b.Files[0].Data)
 	}
-	// Files only: no env in a hook bundle.
 	if len(b.Env) != 0 {
 		t.Errorf("hook bundle must carry no env, got %d", len(b.Env))
 	}
-	// Manifest present, records the pointer and hash, never a value.
 	if len(b.Manifest) == 0 {
 		t.Fatal("manifest missing")
 	}
@@ -145,32 +115,63 @@ func TestHandleReturnsFileBundle(t *testing.T) {
 	}
 }
 
+// TestHandleIdentityFromComposeAnnotation proves a hook-mode container with no
+// berm.name is identified by its compose-service annotation (the hook has no
+// container name to fall back on).
+func TestHandleIdentityFromComposeAnnotation(t *testing.T) {
+	h := newHandler()
+	ann := map[string]string{
+		"berm.enable":                "true",
+		"berm.delivery":              "hook",
+		"com.docker.compose.service": "webapp",
+		"com.docker.compose.project": "myproj",
+		"berm.file.pgpass.from":      "DB_PASSWORD",
+	}
+	b, err := h.Handle(context.Background(), cid, ann, time.Unix(1_700_000_000, 0))
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	defer b.Destroy()
+	if len(b.Files) != 1 || !bytes.Equal(b.Files[0].Data, []byte("p=ss w0rd!")) {
+		t.Fatalf("expected webapp's secret resolved via the compose annotation, got %+v", b.Files)
+	}
+}
+
+// TestHandleNoIdentityFails proves a hook-mode container with neither a berm.name
+// nor a compose-service annotation fails closed (the hook has no container name).
+func TestHandleNoIdentityFails(t *testing.T) {
+	h := newHandler()
+	ann := map[string]string{
+		"berm.enable":           "true",
+		"berm.delivery":         "hook",
+		"berm.file.pgpass.from": "DB_PASSWORD",
+	}
+	if _, err := h.Handle(context.Background(), cid, ann, time.Now()); err == nil {
+		t.Fatal("expected a failure with no resolvable service identity")
+	}
+}
+
 func TestHandleRefusesEnv(t *testing.T) {
 	// A hook-mode container that declares env is refused: env is impossible in
 	// hook mode. The resolver rejects it; Handle surfaces the error.
-	h := newHandler(func(context.Context, string) (runtime.Container, error) {
-		return runtime.Container{
-			ID:      cid,
-			Service: "webapp",
-			Labels: map[string]string{
-				"berm.enable":          "true",
-				"berm.delivery":        "hook",
-				"berm.env":             "DB_PASSWORD",
-				"berm.env.acknowledge": "true",
-			},
-		}, nil
-	})
-	if _, err := h.Handle(context.Background(), cid, time.Now()); err == nil {
+	h := newHandler()
+	ann := map[string]string{
+		"berm.enable":          "true",
+		"berm.name":            "webapp",
+		"berm.delivery":        "hook",
+		"berm.env":             "DB_PASSWORD",
+		"berm.env.acknowledge": "true",
+	}
+	if _, err := h.Handle(context.Background(), cid, ann, time.Now()); err == nil {
 		t.Fatal("expected env on hook mode to be refused")
 	}
 }
 
 func TestHandleRefusesInert(t *testing.T) {
 	// A container without berm.enable is inert; a hook request for it is refused.
-	h := newHandler(func(context.Context, string) (runtime.Container, error) {
-		return runtime.Container{ID: cid, Service: "webapp", Labels: map[string]string{}}, nil
-	})
-	_, err := h.Handle(context.Background(), cid, time.Now())
+	h := newHandler()
+	ann := map[string]string{"berm.name": "webapp"}
+	_, err := h.Handle(context.Background(), cid, ann, time.Now())
 	if !errors.Is(err, ErrNotEnabled) {
 		t.Fatalf("Handle inert = %v, want ErrNotEnabled", err)
 	}
@@ -178,28 +179,15 @@ func TestHandleRefusesInert(t *testing.T) {
 
 func TestHandleRefusesNonHookMechanism(t *testing.T) {
 	// A berm container that chose client-mode must not be injected by the hook.
-	h := newHandler(func(context.Context, string) (runtime.Container, error) {
-		return runtime.Container{
-			ID:      cid,
-			Service: "webapp",
-			Labels: map[string]string{
-				"berm.enable":           "true",
-				"berm.delivery":         "client",
-				"berm.file.pgpass.from": "DB_PASSWORD",
-			},
-		}, nil
-	})
-	_, err := h.Handle(context.Background(), cid, time.Now())
+	h := newHandler()
+	ann := map[string]string{
+		"berm.enable":           "true",
+		"berm.name":             "webapp",
+		"berm.delivery":         "client",
+		"berm.file.pgpass.from": "DB_PASSWORD",
+	}
+	_, err := h.Handle(context.Background(), cid, ann, time.Now())
 	if !errors.Is(err, ErrNotHookMode) {
 		t.Fatalf("Handle client-mode = %v, want ErrNotHookMode", err)
-	}
-}
-
-func TestHandleInspectError(t *testing.T) {
-	h := newHandler(func(context.Context, string) (runtime.Container, error) {
-		return runtime.Container{}, errors.New("no such container")
-	})
-	if _, err := h.Handle(context.Background(), cid, time.Now()); err == nil {
-		t.Fatal("expected an error when inspect fails")
 	}
 }

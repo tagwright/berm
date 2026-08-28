@@ -92,15 +92,17 @@ func dialAndFetch(t *testing.T, sock string) (*wire.Bundle, error) {
 	return wire.ReadResponse(conn)
 }
 
-// dialAndHook connects and sends a hook request for containerID.
-func dialAndHook(t *testing.T, sock, containerID string) (*wire.Bundle, error) {
+// dialAndHook connects and sends a hook request for containerID with the
+// container's presented OCI annotations (its berm.* config), the way the trusted
+// pre-start hook does.
+func dialAndHook(t *testing.T, sock, containerID string, annotations map[string]string) (*wire.Bundle, error) {
 	t.Helper()
 	conn, err := net.DialTimeout("unix", sock, 2*time.Second)
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
 	defer conn.Close()
-	if err := wire.WriteHookRequest(conn, containerID); err != nil {
+	if err := wire.WriteHookRequest(conn, containerID, annotations); err != nil {
 		t.Fatalf("write hook request: %v", err)
 	}
 	return wire.ReadResponse(conn)
@@ -218,22 +220,24 @@ func TestServerHookDispatch(t *testing.T) {
 		},
 	)
 
+	// The hook path does NOT inspect the container over the runtime (that would
+	// deadlock against the create the pre-start hook blocks): the daemon resolves
+	// from the annotations the hook presents. The fake runtime is present only to
+	// build the daemon; its Inspect is not consulted on this path.
 	rt := newFakeRuntime()
-	rt.add(runtime.Container{
-		ID:      "cid-hookapp",
-		Name:    "/hookapp",
-		Service: "hookapp",
-		Labels: map[string]string{
-			"berm.enable":        "true",
-			"berm.delivery":      "hook",
-			"berm.file.tok.from": "TOKEN",
-		},
-	})
 	_ = tlsKey
 
 	_, sock, _, _ := testDaemon(t, rt, opener, cfg, &stubAuth{}, &fakeSink{})
 
-	bundle, err := dialAndHook(t, sock, "cid-hookapp")
+	// berm.name identifies the container: the hook has no container name to fall
+	// back on, so hook-mode config is presented as annotations including berm.name.
+	ann := map[string]string{
+		"berm.enable":        "true",
+		"berm.name":          "hookapp",
+		"berm.delivery":      "hook",
+		"berm.file.tok.from": "TOKEN",
+	}
+	bundle, err := dialAndHook(t, sock, "cid-hookapp", ann)
 	if err != nil {
 		t.Fatalf("hook refused: %v", err)
 	}

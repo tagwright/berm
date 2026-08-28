@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"sort"
 
 	"github.com/awnumar/memguard"
 )
@@ -47,18 +48,29 @@ func WriteRequest(w io.Writer) error {
 	return nil
 }
 
-// WriteHookRequest writes a hook request onto w carrying the OCI container id.
-// The hook binary calls it after connecting: unlike the client, the hook has no
-// peer container identity of its own, so it presents the id of the container it
-// is populating and the daemon validates it.
-func WriteHookRequest(w io.Writer, containerID string) error {
+// WriteHookRequest writes a hook request onto w carrying the OCI container id
+// and the container's OCI annotations. The hook binary calls it after
+// connecting: unlike the client, the hook has no peer container identity of its
+// own, so it presents the id AND the container's own config annotations (the
+// berm.* keys the operator set, which the runtime handed the hook in the OCI
+// state). The daemon resolves from these presented annotations rather than
+// inspecting the container over the runtime API: the pre-start hook fires while
+// the runtime holds the container-creation lock, so a daemon Inspect of that
+// same container would deadlock against the create the hook is blocking. The
+// hook is a trusted, privileged host-side component, so presenting the
+// container's own annotations is consistent with that trust boundary. The
+// annotations are not secret.
+func WriteHookRequest(w io.Writer, containerID string, annotations map[string]string) error {
 	if containerID == "" {
 		return fmt.Errorf("wire: hook request needs a container id")
 	}
 	if _, err := w.Write([]byte{ProtocolVersion, msgHookRequest}); err != nil {
 		return fmt.Errorf("wire: write hook request header: %w", err)
 	}
-	return writeU16Bytes(w, []byte(containerID))
+	if err := writeU16Bytes(w, []byte(containerID)); err != nil {
+		return err
+	}
+	return writeStringMap(w, annotations)
 }
 
 // ReadRequestHeader reads and validates the two-byte frame header from r and
@@ -84,18 +96,24 @@ func ReadRequestHeader(r io.Reader) (RequestType, error) {
 	}
 }
 
-// ReadHookBody reads the container id that follows a hook request header. The
-// daemon calls it after ReadRequestHeader returns RequestHook. The id is a
-// length-prefixed byte string bounded by the u16 field cap.
-func ReadHookBody(r io.Reader) (string, error) {
+// ReadHookBody reads the container id and the container's OCI annotations that
+// follow a hook request header. The daemon calls it after ReadRequestHeader
+// returns RequestHook. The id is a length-prefixed byte string; the annotations
+// are a length-prefixed key/value map. Both are bounded by the field caps, so a
+// hostile length cannot drive an unbounded allocation.
+func ReadHookBody(r io.Reader) (string, map[string]string, error) {
 	id, err := readU16String(r)
 	if err != nil {
-		return "", fmt.Errorf("wire: read hook container id: %w", err)
+		return "", nil, fmt.Errorf("wire: read hook container id: %w", err)
 	}
 	if id == "" {
-		return "", fmt.Errorf("wire: hook request carried an empty container id")
+		return "", nil, fmt.Errorf("wire: hook request carried an empty container id")
 	}
-	return id, nil
+	ann, err := readStringMap(r)
+	if err != nil {
+		return "", nil, fmt.Errorf("wire: read hook annotations: %w", err)
+	}
+	return id, ann, nil
 }
 
 // ReadRequest reads and validates a fetch request from r. It is the fetch-only
@@ -114,16 +132,16 @@ func ReadRequest(r io.Reader) error {
 }
 
 // ReadHookRequest reads and validates a whole hook request from r (header and
-// body) and returns the container id. It is the symmetric counterpart to
-// WriteHookRequest for direct use and tests; the daemon loop uses
+// body) and returns the container id and its annotations. It is the symmetric
+// counterpart to WriteHookRequest for direct use and tests; the daemon loop uses
 // ReadRequestHeader plus ReadHookBody so it can dispatch on the type first.
-func ReadHookRequest(r io.Reader) (string, error) {
+func ReadHookRequest(r io.Reader) (string, map[string]string, error) {
 	rt, err := ReadRequestHeader(r)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	if rt != RequestHook {
-		return "", fmt.Errorf("wire: request is not a hook request")
+		return "", nil, fmt.Errorf("wire: request is not a hook request")
 	}
 	return ReadHookBody(r)
 }
@@ -327,6 +345,56 @@ func writeU32Bytes(w io.Writer, p []byte) error {
 	}
 	_, err := w.Write(p)
 	return err
+}
+
+// writeStringMap writes a length-prefixed key/value map: a u16 count followed by
+// that many (u16 key, u16 value) pairs. Keys are emitted in sorted order so the
+// encoding is deterministic (stable golden tests, reproducible frames). The map
+// carries only non-secret annotations.
+func writeStringMap(w io.Writer, m map[string]string) error {
+	if len(m) > 0xffff {
+		return fmt.Errorf("wire: annotation count %d exceeds u16", len(m))
+	}
+	if err := writeU16(w, uint32(len(m))); err != nil {
+		return err
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		if err := writeU16Bytes(w, []byte(k)); err != nil {
+			return err
+		}
+		if err := writeU16Bytes(w, []byte(m[k])); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// readStringMap reads a map written by writeStringMap. The count and each field
+// are bounded by the u16 caps, so a corrupt frame cannot drive an unbounded
+// allocation. A zero count returns a non-nil empty map.
+func readStringMap(r io.Reader) (map[string]string, error) {
+	n, err := readU16(r)
+	if err != nil {
+		return nil, err
+	}
+	m := make(map[string]string, n)
+	for i := 0; i < n; i++ {
+		k, e := readU16String(r)
+		if e != nil {
+			return nil, e
+		}
+		v, e := readU16String(r)
+		if e != nil {
+			return nil, e
+		}
+		m[k] = v
+	}
+	return m, nil
 }
 
 func readU16(r io.Reader) (int, error) {

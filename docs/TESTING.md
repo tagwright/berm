@@ -92,15 +92,105 @@ Rotation:
   `berm stale` report the container as drifted (ciphertext-hash comparison) with
   no value exposed.
 
-### Coverage: COMPILE-ONLY / UNPROVEN
+### Coverage: COMPILE-ONLY / UNPROVEN (Docker harness)
 
-- Podman (hook mode and the rootless nested-podman path) is NOT exercised here.
-  The hook handler and the OCI pre-start hook are unit-tested, and the peerauth
-  fixtures cover Podman cgroup shapes, but no live Podman host was driven. This
-  is a separate later chunk (9b).
-- cgroup v1 and the Podman rootful/rootless SO_PEERCRED topologies are covered
-  by peerauth unit fixtures only; the live proof is Docker 29 / cgroup v2 /
-  systemd (see EMPIRICAL.md).
+- cgroup v1 is covered by peerauth unit fixtures only; the live Docker proof is
+  Docker 29 / cgroup v2 / systemd (see EMPIRICAL.md). The live Podman topologies
+  are covered by the nested-podman harness below.
+
+## Integration harness (nested-Podman path)
+
+`test/integration/run-podman.sh` is the second integration harness, the FIRST
+live exercise of the Podman runtime, the OCI pre-start HOOK delivery, and the
+container-mount-namespace write. Mirroring how ballast proved Podman, it stands
+up a throwaway rootful Podman by running `quay.io/podman/stable` (`--privileged`,
+for Podman's own nested runtime), loads the berm image into it, installs
+`berm-hook` via Podman's `hooks_dir`, and runs the berm daemon (a Podman
+container, `--pid host`), the OCI hook, and the app containers INSIDE that
+Podman. Every object is prefixed `berm-itest-*` and torn down on exit, with a
+final leak check. Run it (needs a live Docker socket, host `sops`, and network
+egress once to pull `quay.io/podman/stable`, `docker.io/library/busybox`, and
+build a static `age-keygen`):
+
+```
+bash test/integration/run-podman.sh
+```
+
+Verified live against Podman 5.8.4 / crun 1.28 / cgroup v2. Most recent run: 20
+assertions, all passing, no leaks.
+
+### Coverage: PROVEN (live, against a real Podman socket and crun-created containers)
+
+Hook mode (the Podman primary), end to end:
+
+- The `berm-hook` OCI hook, installed via `hooks_dir`, fires at the
+  `createContainer` stage for a `berm.enable`-annotated container, connects to
+  the daemon over the hook-request protocol, and writes the file secret into the
+  container's OWN mount namespace, on tmpfs, BEFORE PID 1 (PID 1's first
+  instruction already sees the file), byte-exact to the known plaintext, with the
+  numeric owner (uid 1000) and mode (0440). The manifest lands on the tmpfs too.
+- The age key never reaches the app container, and the secret plaintext exists
+  ONLY on the tmpfs, never in the app's persistent rootfs (`podman export`).
+- Files only: an env declaration under hook mode is refused end to end (the
+  resolver + the hook handler refuse env), which fails that one container's start
+  loudly (`env_wrong_mechanism`, no silent empty delivery), while the rest of the
+  fleet is still served (a fresh files-only hook container still works).
+
+Podman runtime for the other modes:
+
+- Client mode works under Podman: the daemon selects the Podman runtime
+  (`BERM_RUNTIME=podman`), peer-authenticates the caller through the libpod
+  cgroup topology (`0::/libpod_parent/libpod-<id>`, exercising peerauth's cgroup
+  parsing for real), and delivers the file secret byte-exact on tmpfs.
+- Volume mode works under Podman: the daemon watches the live Podman event
+  stream, populates the shared tmpfs named volume on the start event, the
+  manifest appears as the ready signal, and the app reads its secret byte-exact.
+- Compose/pod service identity: a hook-mode container with no `berm.name`,
+  identified only by a `com.docker.compose.service` annotation, resolves to the
+  matching source.
+
+### Coverage: rootless-Podman observations (the architecture's flagged item)
+
+Rootless Podman is exercised best-effort and reported honestly, not asserted
+green:
+
+- OBSERVED: the `createContainer` hook FIRES under rootless Podman (it runs as
+  uid 0 inside the container user namespace), and the rootless OCI state carries
+  the container rootfs path, so berm-hook's createContainer write path applies
+  unchanged rootless.
+- UNPROVEN (full rootless `berm-hook` -> daemon end to end): the harness daemon
+  binds a ROOT-OWNED socket at `/run/berm/berm.sock`, which a rootless hook
+  (running as the unprivileged user) cannot connect to. A real rootless deploy
+  runs the daemon rootless too, with a user-owned socket. Standing up a fully
+  rootless daemon + age-key chain was out of scope for this harness; the rootful
+  hook path is fully proven above.
+
+### Bug found and fixed by the nested-Podman pass
+
+The integration streak held: this pass found two real bugs in the hook path,
+both in code that unit tests and the Docker harness could not reach.
+
+1. Wrong hook stage and write path. The hook shipped at the `createRuntime` stage
+   and wrote via `setns` into `/run/berm` as `/`. Verified live: at
+   `createRuntime` the hook fires host-side BEFORE the container mounts exist, so
+   the tmpfs the secret must land on is not present and the write cannot reach it.
+   Fixed to the `createContainer` stage (the architecture's intended stage), which
+   runs the hook inside the container's own mount namespace after the mounts are
+   set up but before `pivot_root`, and to write the bundle under the container
+   rootfs path the OCI state carries (`WriteFilesUnderRoot`, no setns).
+2. Inspect-during-createContainer deadlock. The daemon resolved a hook request by
+   inspecting the container over the runtime API. The pre-start hook fires while
+   Podman holds the container-creation lock, so the daemon's Inspect of that same
+   container deadlocked against the create the hook was blocking (hook timed out,
+   container start failed). Fixed by having the hook PRESENT the container's OCI
+   annotations (its `berm.*` config, which the runtime hands the hook in the OCI
+   state) in the hook request, so the daemon resolves from them without any
+   runtime inspect. The daemon still validates the presented config against
+   `berm.yml` (files-only, service scoping, owner-plus-grant). Consequence: in
+   hook mode the `berm.*` config is set as OCI ANNOTATIONS (not labels), which is
+   also what the hook `when` trigger already needs.
+
+### Coverage: COMPILE-ONLY / UNPROVEN (Docker harness)
 
 ## Bugs found and fixed by the integration pass
 

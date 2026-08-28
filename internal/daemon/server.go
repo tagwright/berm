@@ -188,19 +188,21 @@ func (s *server) handleFetch(ctx context.Context, conn *net.UnixConn) {
 }
 
 // handleHook runs the trusted-injector hook path. It reads the presented
-// container id and asks the hook handler to inspect, validate, resolve, and
-// build that container's file bundle. A not-enabled or not-hook-mode container
-// is a clean skip (logged, no alert); a validation error is skip-and-alert; a
-// built bundle is serialized and recorded.
+// container id and the container's OCI annotations, and asks the hook handler to
+// derive the identity, validate, resolve, and build that container's file bundle
+// from those annotations (no runtime inspect: that would deadlock against the
+// create the pre-start hook is blocking). A not-enabled or not-hook-mode
+// container is a clean skip (logged, no alert); a validation error is
+// skip-and-alert; a built bundle is serialized and recorded.
 func (s *server) handleHook(ctx context.Context, conn *net.UnixConn) {
-	cid, err := wire.ReadHookBody(conn)
+	cid, annotations, err := wire.ReadHookBody(conn)
 	if err != nil {
 		s.d.log.Warn("bad hook request", "err", err.Error())
 		_ = wire.WriteError(conn, "bad hook request")
 		return
 	}
 
-	bundle, err := s.d.hookd.Handle(ctx, cid, s.d.now())
+	bundle, err := s.d.hookd.Handle(ctx, cid, annotations, s.d.now())
 	if err != nil {
 		// A hook that fired for a non-berm or non-hook container is a benign
 		// misconfiguration: refuse it without an alert storm. A genuine

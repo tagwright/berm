@@ -231,7 +231,7 @@ func New(cfg Config) (*Daemon, error) {
 		opener:         cfg.Opener,
 		sink:           cfg.Sink,
 		auth:           auth,
-		hookd:          hookd.NewHandler(cfg.Runtime, cfg.Berm, cfg.Opener, defDeliv),
+		hookd:          hookd.NewHandler(cfg.Berm, cfg.Opener, defDeliv),
 		ledger:         ledger,
 		defDeliv:       defDeliv,
 		sockPath:       sockPath,

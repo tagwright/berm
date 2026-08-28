@@ -65,7 +65,7 @@ func run(args []string) int {
 	}
 
 	ctx := context.Background()
-	bundle, err := hook.Fetch(ctx, socket(), state.ID, timeout())
+	bundle, err := hook.Fetch(ctx, socket(), state.ID, state.Annotations, timeout())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "berm-hook: fetch for %s: %v\n", state.ID, err)
 		return 1
