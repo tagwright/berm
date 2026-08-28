@@ -1,0 +1,58 @@
+# berm.yml for the integration harness. Nothing here is a secret value: it holds
+# names, paths, formats, owners, and grants only. The ciphertext under
+# BERM_SOURCES_ROOT is generated at run time by run.sh (sops + a fresh age key),
+# and this file is mounted read-only into the berm-itest-daemon container.
+#
+# Paths are the in-container paths the daemon sees: the age key at
+# /run/berm/age/default.key (mounted daemon-only, read-only) and the source
+# files under BERM_SOURCES_ROOT (/var/lib/berm/sources, mounted read-only).
+
+age_keys:
+  default: /run/berm/age/default.key
+
+sources:
+  # Two isolated single-owner dotenv sources, one per service, for the adversarial
+  # peer-auth isolation proof: svca owns svca, svcb owns svcb, neither grants the
+  # other, so a compromised svcb can never reach svca.
+  svca:
+    file: svca.sops.env
+    format: dotenv
+  svcb:
+    file: svcb.sops.env
+    format: dotenv
+
+  # The client happy-path source: a file secret (with a _FILE pointer) and an
+  # env-delivered secret in one dotenv source owned by svcenv.
+  svcenv:
+    file: svcenv.sops.env
+    format: dotenv
+
+  # The volume-mode source, owned by svcv.
+  svcv:
+    file: svcv.sops.env
+    format: dotenv
+
+  # A shared dotenv source owned by dbowner, with webapp granted read. Proves the
+  # positive cross-service grant and, by contrast, the refusal of an ungranted
+  # reader (intruder is not on the access list).
+  shared-db:
+    file: shared-db.sops.env
+    format: dotenv
+    owner: dbowner
+    access:
+      - webapp
+
+  # A binary source for the whole-payload path and the wrong-ref-shape failures.
+  binblob:
+    file: binblob.sops.bin
+    format: binary
+
+  # A source whose ciphertext the harness re-encrypts mid-run to prove the
+  # staleness ledger flags drift by ciphertext-hash comparison.
+  svcstale:
+    file: svcstale.sops.env
+    format: dotenv
+
+defaults:
+  delivery: client
+  mode: "0400"
