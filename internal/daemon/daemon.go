@@ -68,6 +68,13 @@ const DefaultLedgerPath = "/var/lib/berm/ledger.json"
 // mounts the volumes here.
 const DefaultVolumeMountRoot = "/run/berm/volumes"
 
+// DefaultReconcileInterval is how often the daemon reconciles volume-mode
+// containers whose shared volume is missing its manifest. This closes the
+// create-then-gated-start gap in the volume deploy topology (see runReconcile),
+// where a container is created but its start is blocked by the manifest waiter,
+// so no start event ever fires to trigger population.
+const DefaultReconcileInterval = 2 * time.Second
+
 // Authenticator authenticates a caller on the berm socket to a container
 // identity. *peerauth.Authenticator satisfies it. It is an interface so a
 // library-level test can inject a stubbed identity in place of a live
@@ -115,6 +122,11 @@ type Config struct {
 	// Berm.Globals.ClientTimeout.
 	ClientTimeout time.Duration
 
+	// ReconcileInterval is how often the volume-mode reconcile runs. Zero uses
+	// DefaultReconcileInterval. A negative value disables the reconcile (used by
+	// tests that drive the loop deterministically).
+	ReconcileInterval time.Duration
+
 	// DigestEnabled turns the scheduled stale digest on. When false no digest is
 	// scheduled. Defaults from Berm.Globals.StaleDigest when Berm is set.
 	DigestEnabled bool
@@ -134,20 +146,21 @@ type Config struct {
 // control loop, a staleness ledger, a client-timeout tracker, and a scheduled
 // digest. Construct it with New and drive it with Run.
 type Daemon struct {
-	cfg      Config
-	rt       runtime.Runtime
-	berm     *config.Config
-	opener   delivery.Opener
-	sink     Sink
-	auth     Authenticator
-	hookd    *hookd.Handler
-	ledger   *Ledger
-	tracker  *clientTracker
-	defDeliv delivery.Mechanism
-	sockPath string
-	volRoot  string
-	log      *slog.Logger
-	now      func() time.Time
+	cfg            Config
+	rt             runtime.Runtime
+	berm           *config.Config
+	opener         delivery.Opener
+	sink           Sink
+	auth           Authenticator
+	hookd          *hookd.Handler
+	ledger         *Ledger
+	tracker        *clientTracker
+	defDeliv       delivery.Mechanism
+	sockPath       string
+	volRoot        string
+	reconcileEvery time.Duration
+	log            *slog.Logger
+	now            func() time.Time
 
 	sticky *stickyStore
 	locks  *keyedMutex
@@ -201,6 +214,10 @@ func New(cfg Config) (*Daemon, error) {
 	if timeout == 0 {
 		timeout = cfg.Berm.Globals.ClientTimeout
 	}
+	reconcileEvery := cfg.ReconcileInterval
+	if reconcileEvery == 0 {
+		reconcileEvery = DefaultReconcileInterval
+	}
 
 	ledger, err := LoadLedger(ledgerPath)
 	if err != nil {
@@ -208,21 +225,22 @@ func New(cfg Config) (*Daemon, error) {
 	}
 
 	d := &Daemon{
-		cfg:      cfg,
-		rt:       cfg.Runtime,
-		berm:     cfg.Berm,
-		opener:   cfg.Opener,
-		sink:     cfg.Sink,
-		auth:     auth,
-		hookd:    hookd.NewHandler(cfg.Runtime, cfg.Berm, cfg.Opener, defDeliv),
-		ledger:   ledger,
-		defDeliv: defDeliv,
-		sockPath: sockPath,
-		volRoot:  volRoot,
-		log:      log,
-		now:      now,
-		sticky:   newStickyStore(),
-		locks:    newKeyedMutex(),
+		cfg:            cfg,
+		rt:             cfg.Runtime,
+		berm:           cfg.Berm,
+		opener:         cfg.Opener,
+		sink:           cfg.Sink,
+		auth:           auth,
+		hookd:          hookd.NewHandler(cfg.Runtime, cfg.Berm, cfg.Opener, defDeliv),
+		ledger:         ledger,
+		defDeliv:       defDeliv,
+		sockPath:       sockPath,
+		volRoot:        volRoot,
+		reconcileEvery: reconcileEvery,
+		log:            log,
+		now:            now,
+		sticky:         newStickyStore(),
+		locks:          newKeyedMutex(),
 	}
 	d.tracker = newClientTracker(context.Background(), timeout, cfg.Sink)
 	d.server = &server{d: d}
@@ -250,6 +268,11 @@ func (d *Daemon) Run(ctx context.Context) error {
 	wg.Add(2)
 	go func() { defer wg.Done(); d.server.serve(ctx) }()
 	go func() { defer wg.Done(); d.runLoop(ctx) }()
+
+	if d.reconcileEvery > 0 {
+		wg.Add(1)
+		go func() { defer wg.Done(); d.runReconcile(ctx) }()
+	}
 
 	digestEnabled := d.cfg.DigestEnabled || (d.berm != nil && d.berm.Globals.StaleDigest)
 	if digestEnabled {

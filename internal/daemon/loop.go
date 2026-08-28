@@ -5,6 +5,7 @@ package daemon
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/tagwright/berm/internal/delivery"
 	"github.com/tagwright/berm/internal/peerauth"
 	"github.com/tagwright/berm/internal/resolve"
+	"github.com/tagwright/berm/internal/wire"
 )
 
 // runLoop is the event-driven control loop. It watches the runtime for
@@ -60,6 +62,85 @@ func (d *Daemon) watchOnce(ctx context.Context) {
 			}
 			d.handleEvent(ctx, ev)
 		}
+	}
+}
+
+// runReconcile periodically populates volume-mode containers whose shared tmpfs
+// volume is missing its manifest (the ready signal). It closes a gap the event
+// watch alone cannot: the runtime emits no create event through core, so a
+// volume-mode container that has been CREATED but whose START is gated cannot be
+// populated on a start event, because that start never happens. This is exactly
+// the shipped volume deploy topology (a waiter blocks on the manifest, and the
+// app depends_on the waiter's clean completion): the app is created up front by
+// compose, then waits, and its start is what the waiter blocks on, so without
+// this reconcile the manifest never appears and the deploy deadlocks.
+//
+// The reconcile is idempotent and quiet: it acts on a container only when the
+// manifest is absent, so a volume it has already populated is skipped, and it
+// resolves labels against berm.yml but does not alert on a validation failure
+// here (the start-event path owns alerting), to avoid an alert every interval.
+// It populates only volume-mode containers whose named volume the operator
+// mounted into the daemon, which is the same precondition start-event delivery
+// needs, so it never touches a container it could not already serve.
+func (d *Daemon) runReconcile(ctx context.Context) {
+	if d.reconcileEvery <= 0 {
+		return
+	}
+	d.reconcileVolumes(ctx)
+	t := time.NewTicker(d.reconcileEvery)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			d.reconcileVolumes(ctx)
+		}
+	}
+}
+
+// reconcileVolumes lists every container and populates any volume-mode berm
+// container whose shared volume is mounted into the daemon but is missing its
+// manifest. It is List-driven (labels and state come back with the listing, so
+// no per-container inspect), and it resolves and decrypts only for the volume
+// containers that still need populating.
+func (d *Daemon) reconcileVolumes(ctx context.Context) {
+	containers, err := d.rt.List(ctx)
+	if err != nil {
+		d.log.Warn("reconcile list failed", "err", err.Error())
+		return
+	}
+	for _, c := range containers {
+		svc, err := peerauth.ServiceName(c)
+		if err != nil {
+			continue
+		}
+		plan, rerr := resolve.Resolve(resolve.Input{
+			Labels:          c.Labels,
+			ContainerID:     c.ID,
+			Service:         svc,
+			Config:          d.berm,
+			DefaultDelivery: d.defDeliv,
+		})
+		// Not berm-enabled, or a validation error: the start-event path handles
+		// alerting. Reconcile stays silent so it cannot storm the sink.
+		if rerr != nil || plan == nil || plan.Mechanism != delivery.MechVolume {
+			continue
+		}
+		volName := volumeName(c, plan.Service)
+		mountPath := filepath.Join(d.volRoot, volName)
+		// Only a volume the operator mounted into the daemon can be written.
+		if _, err := os.Stat(mountPath); err != nil {
+			continue
+		}
+		// Skip a volume already populated: the manifest is the ready signal, so
+		// its presence means this container has been served.
+		manifestPath := filepath.Join(mountPath, filepath.Base(wire.DefaultManifestPath))
+		if _, err := os.Stat(manifestPath); err == nil {
+			continue
+		}
+		d.log.Info("reconcile: populating a created-but-not-started volume container", "container", c.ID, "service", plan.Service)
+		d.pushVolume(ctx, plan, c)
 	}
 }
 
