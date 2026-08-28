@@ -1,0 +1,12 @@
+{
+  "version": "1.0.0",
+  "hook": {
+    "path": "/usr/local/bin/berm-hook"
+  },
+  "when": {
+    "annotations": {
+      "^berm\\.enable$": "^true$"
+    }
+  },
+  "stages": ["createRuntime"]
+}

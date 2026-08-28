@@ -1,0 +1,75 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Client mode, the Docker primary. The app's entrypoint is wrapped as
+# `berm-client exec -- <app>`: it connects to the daemon over the shared,
+# peer-authenticated socket, receives ONLY this container's own declared
+# secrets, delivers them to tmpfs, and execs the real process. It is the only
+# mode that can deliver env, because it is the only one that controls the process
+# environment at exec.
+
+services:
+  berm:
+    image: ghcr.io/tagwright/berm:00.01.00b1
+    # Listen on a socket in a dedicated shared volume, kept separate from the
+    # app's own /run/berm tmpfs where delivered files land.
+    command: ["daemon", "--config", "/etc/berm/berm.yml", "--socket", "/run/berm-sock/berm.sock"]
+    # Host PID namespace: the daemon walks /proc to authenticate callers.
+    pid: host
+    # No egress. The daemon never phones out.
+    network_mode: none
+    # Optional hardening: the daemon needs no writable rootfs (its plaintext
+    # window is memory-only via memguard, and it writes only into the socket
+    # volume). A read-only rootfs plus no-new-privileges tightens the blast
+    # radius further.
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+    volumes:
+      # The Docker socket, read-only: watch and inspect containers, authenticate callers.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # berm.yml: structure only, no secret value.
+      - ./berm.yml:/etc/berm/berm.yml:ro
+      # Encrypted sources under BERM_SOURCES_ROOT, read-only ciphertext.
+      - ./secrets/sources:/var/lib/berm/sources:ro
+      # The age key, mounted ONLY into the daemon, never into an app. Provisioned
+      # at deploy time by SOPS (see ../README.md).
+      - ./secrets/age:/run/berm/age:ro
+      # The daemon's listen socket, shared to app containers via a named volume.
+      - berm-sock:/run/berm-sock
+      # The staleness ledger (ciphertext hashes only, no secret value).
+      - berm-state:/var/lib/berm
+    environment:
+      BERM_SOURCES_ROOT: /var/lib/berm/sources
+      BERM_DEFAULT_DELIVERY: client
+    restart: unless-stopped
+
+  # An example app. Its image (./app) COPY --from's berm-client and wraps its
+  # entrypoint with it. On start berm-client fetches this container's secrets and
+  # execs the real process.
+  example-app:
+    build: ./app
+    labels:
+      berm.enable: "true"
+      berm.delivery: "client"
+      # Deliver the POSTGRES_PASSWORD key from the default source (service name
+      # "example-app") to a tmpfs file. Because POSTGRES_PASSWORD_FILE is a known
+      # _FILE pointer, the non-secret pointer env var is auto-set too.
+      berm.file.pgpass.from: "POSTGRES_PASSWORD"
+    environment:
+      # Point the client at the shared daemon socket.
+      BERM_SOCK: /run/berm-sock/berm.sock
+    volumes:
+      # Reach the daemon socket. A unix connect() needs write on the socket, so
+      # this is not mounted read-only.
+      - berm-sock:/run/berm-sock
+    # Delivered secrets land on this per-container tmpfs, never persistent disk.
+    tmpfs:
+      - /run/berm
+    depends_on:
+      - berm
+
+volumes:
+  berm-sock:
+  berm-state:

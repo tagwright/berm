@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Hook mode, the Podman primary. The daemon runs as a service and the host-side
+# OCI hook (installed per this directory's README) writes secrets into each
+# berm-enabled container before PID 1. The app image is UNCHANGED: no client
+# binary, no entrypoint wrap. Files only, env is refused in hook mode.
+#
+# Run with podman-compose. The daemon binds its listen socket to the host path
+# /run/berm/berm.sock so the host-side hook (which runs in the host mount
+# namespace) can reach it at berm-hook's default socket path.
+
+services:
+  berm:
+    image: ghcr.io/tagwright/berm:00.01.00b1
+    # Default socket path /run/berm/berm.sock, bound to the host /run/berm below.
+    command: ["daemon", "--config", "/etc/berm/berm.yml"]
+    pid: host
+    network_mode: none
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      # The Podman socket, read-only. Rootful path shown. For rootless Podman use
+      # ${XDG_RUNTIME_DIR}/podman/podman.sock instead.
+      - /run/podman/podman.sock:/run/podman/podman.sock:ro
+      - ./berm.yml:/etc/berm/berm.yml:ro
+      - ./secrets/sources:/var/lib/berm/sources:ro
+      # The age key, daemon only, provisioned by SOPS at deploy (see ../README.md).
+      - ./secrets/age:/run/berm/age:ro
+      # Bind /run/berm to the host so the daemon socket at /run/berm/berm.sock is
+      # reachable by the host-side hook. The age key mount above sits under it.
+      - /run/berm:/run/berm
+      - berm-state:/var/lib/berm
+    environment:
+      BERM_SOURCES_ROOT: /var/lib/berm/sources
+      BERM_DEFAULT_DELIVERY: hook
+    restart: unless-stopped
+
+  # An example app. The image is untouched. The hook writes POSTGRES_PASSWORD
+  # into /run/berm/pgpass inside this container's mount namespace before postgres
+  # starts, and the auto-set POSTGRES_PASSWORD_FILE pointer makes postgres read it.
+  example-app:
+    image: docker.io/library/postgres:16
+    annotations:
+      # Podman surfaces labels as annotations. Either the annotation here or a
+      # berm.enable label triggers the hook.
+      berm.enable: "true"
+      berm.delivery: "hook"
+      berm.file.pgpass.from: "POSTGRES_PASSWORD"
+    depends_on:
+      - berm
+
+volumes:
+  berm-state:

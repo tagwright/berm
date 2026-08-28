@@ -1,0 +1,76 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Volume mode, the fallback for both runtimes with no image change. The daemon
+# populates a tmpfs-backed NAMED volume (a bare tmpfs mount is not shareable
+# between containers) shared with the app. A waiter service blocks on the atomic
+# appearance of the delivered manifest, and the app depends_on the waiter's
+# clean completion, which closes the container-start race. Files only, env is
+# refused in volume mode.
+#
+# The named volume MUST be tmpfs-backed (driver_opts type=tmpfs) so a secret
+# never lands on persistent disk. The daemon refuses a non-tmpfs target.
+
+services:
+  berm:
+    image: ghcr.io/tagwright/berm:00.01.00b1
+    command: ["daemon", "--config", "/etc/berm/berm.yml", "--socket", "/run/berm-sock/berm.sock"]
+    pid: host
+    network_mode: none
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./berm.yml:/etc/berm/berm.yml:ro
+      - ./secrets/sources:/var/lib/berm/sources:ro
+      # The age key, daemon only.
+      - ./secrets/age:/run/berm/age:ro
+      - berm-sock:/run/berm-sock
+      - berm-state:/var/lib/berm
+      # The daemon mounts each app's berm-<service> tmpfs volume so it can write
+      # the secret and the manifest into the volume the app reads. Here the
+      # example-app volume "berm-example-app" is mounted daemon-side.
+      - berm-example-app:/run/berm-volumes/example-app
+    environment:
+      BERM_SOURCES_ROOT: /var/lib/berm/sources
+      BERM_DEFAULT_DELIVERY: volume
+    restart: unless-stopped
+
+  # The waiter blocks until the daemon has written the manifest into the shared
+  # tmpfs volume, then exits 0. Its clean completion is the ready signal the app
+  # gates on. A tiny busybox is enough: the manifest carries names, paths, and
+  # ciphertext hashes, never a secret value, so polling for it leaks nothing.
+  berm-wait-example-app:
+    image: busybox:1.36
+    command: ["sh", "-c", "until [ -f /run/berm/manifest ]; do sleep 0.2; done"]
+    network_mode: none
+    volumes:
+      - berm-example-app:/run/berm:ro
+    depends_on:
+      - berm
+
+  # The app image is unchanged. It reads its secret from the shared tmpfs volume
+  # at /run/berm, and only starts once the waiter has confirmed the manifest is
+  # in place.
+  example-app:
+    image: docker.io/library/postgres:16
+    labels:
+      berm.enable: "true"
+      berm.delivery: "volume"
+      # berm.volume defaults to berm-<service>, named explicitly here to match
+      # the named volume below.
+      berm.volume: "berm-example-app"
+      berm.file.pgpass.from: "POSTGRES_PASSWORD"
+    volumes:
+      - berm-example-app:/run/berm
+    depends_on:
+      berm-wait-example-app:
+        condition: service_completed_successfully
+
+volumes:
+  berm-sock:
+  berm-state:
+  # The shared secret volume: tmpfs-backed so plaintext never touches disk.
+  berm-example-app:
+    driver_opts:
+      type: tmpfs
+      device: tmpfs

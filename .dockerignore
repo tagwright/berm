@@ -1,0 +1,12 @@
+.git
+/berm
+/berm-client
+/berm-hook
+/dist
+*.test
+*.out
+*.prof
+# Throwaway per-run integration state (the *.sh and *.yml are committed).
+/test/integration/sources
+/test/integration/keys
+/test/integration/out
