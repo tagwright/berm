@@ -1,0 +1,47 @@
+# Example berm.yml. Nothing in this file is a secret value: it holds names,
+# paths, formats, owners, and grants only, which is why it is safe to commit.
+# The secrets live in the age-encrypted *.sops.env and *.sops.bin files that
+# each `file:` points at, decrypted at injection time with the named age key.
+
+# age keys map a name to a host path. The key files are read only by the berm
+# daemon and never enter a consumer container. Each source names which key
+# unseals it; "default" is used when a source omits age_key.
+age_keys:
+  default: /run/berm/age/default.key
+  offsite: /run/berm/age/offsite.key
+
+# Encrypted sources. Each entry names its ciphertext file, its plaintext
+# format, which age key unseals it, the service that owns it, and any
+# additional services granted read.
+sources:
+  # A dotenv source owned by its own name. The owner references it with no
+  # grant needed. A relative file path resolves under BERM_SOURCES_ROOT.
+  firefly-db:
+    file: firefly-db.sops.env
+    format: dotenv              # dotenv (the default) or binary
+    age_key: default            # a name from age_keys above, "default" if omitted
+
+  # A shared dotenv source, owned by postgres, with two other services granted
+  # read. Cross-service sharing is declared twice: here by the grant and again
+  # in each consumer's label. There are no wildcard grants.
+  shared-db:
+    file: shared-db.sops.env
+    format: dotenv
+    owner: postgres
+    access:
+      - webapp
+      - reporter
+
+  # A binary source: one opaque payload delivered whole, unsealed with the
+  # offsite key.
+  webapp-tls:
+    file: webapp-tls.sops.bin
+    format: binary
+    age_key: offsite
+
+# Fleet defaults that an individual label or source overrides. There is
+# deliberately no fleet-wide owner override here: a single line must not be able
+# to silently downgrade every secret's permissions at once.
+defaults:
+  delivery: client
+  mode: "0400"
