@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 the berm authors
+// Copyright (C) 2026 techgaud
 
 // Command probe is the in-container assertion helper for the berm integration
 // harness. It runs inside berm-itest-* app containers so the host-side driver

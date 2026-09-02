@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 the berm authors
+// Copyright (C) 2026 techgaud
 
 // Package version carries the build version string for berm and berm-client.
 //

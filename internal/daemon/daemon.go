@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 the berm authors
+// Copyright (C) 2026 techgaud
 
 // Package daemon is berm's long-lived control plane: the piece that holds the
 // age key, watches the container runtime, and hands each container only its own

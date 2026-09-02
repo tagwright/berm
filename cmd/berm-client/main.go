@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 the berm authors
+// Copyright (C) 2026 techgaud
 
 // Command berm-client is the one-shot client wrapper for client-mode delivery.
 // It runs as the container's entrypoint, connects to the berm daemon over the

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 the berm authors
+// Copyright (C) 2026 techgaud
 
 // Package backend is berm's crypto seam. It defines the one interface the core
 // speaks to turn an encrypted source into transient plaintext, phrased in

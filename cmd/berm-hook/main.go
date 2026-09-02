@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 the berm authors
+// Copyright (C) 2026 techgaud
 
 // Command berm-hook is the Podman OCI pre-start hook for hook-mode delivery. The
 // runtime invokes it in the pre-start stage with the OCI container state JSON on

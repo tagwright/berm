@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 the berm authors
+// Copyright (C) 2026 techgaud
 
 // Package hook is the host-side half of the Podman OCI pre-start hook: parse the
 // OCI runtime state the runtime hands the hook on stdin, fetch the container's

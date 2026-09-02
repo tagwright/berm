@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 the berm authors
+// Copyright (C) 2026 techgaud
 
 // Package resolve turns a container's parsed berm labels into a validated,
 // resolved delivery plan, or a classified skip-and-alert error. It is the layer

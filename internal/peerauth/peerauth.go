@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 the berm authors
+// Copyright (C) 2026 techgaud
 
 // Package peerauth authenticates a caller on berm's unix socket by socket peer
 // identity. It is a security boundary and is written to fail closed: any

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 the berm authors
+// Copyright (C) 2026 techgaud
 
 // Package alert is berm's diagnostics seam over beacon. The label grammar is
 // skip-and-alert: a validation failure on one container (an unknown suffix, an

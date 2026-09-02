@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 the berm authors
+// Copyright (C) 2026 techgaud
 
 // Command berm is the label-driven secrets-injection daemon and its companion
 // CLI. The daemon holds an age key, decrypts SOPS and age encrypted sources,

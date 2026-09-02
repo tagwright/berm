@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 the berm authors
+// Copyright (C) 2026 techgaud
 
 // Package delivery is berm's seam over the three ways a resolved secret
 // reaches a container: the one-shot client wrapper, the OCI pre-start hook,

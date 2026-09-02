@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 the berm authors
+// Copyright (C) 2026 techgaud
 
 // Package cli implements berm's read-only companion subcommands: status,
 // stale, validate, and suggest. cmd/berm wires thin cobra commands to these

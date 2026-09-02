@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 the berm authors
+// Copyright (C) 2026 techgaud
 
 // Command gate2 is the live empirical harness for the second must-verify
 // claim: that SO_PEERCRED on a berm daemon socket resolves the peer pid back

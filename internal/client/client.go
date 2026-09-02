@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 the berm authors
+// Copyright (C) 2026 techgaud
 
 // Package client is the apply half of the one-shot berm-client: connect to the
 // daemon, receive this container's bundle, land its files on tmpfs, and, in the

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 the berm authors
+// Copyright (C) 2026 techgaud
 
 // Package hookd is the daemon side of hook-mode delivery: it turns a hook
 // request (an OCI container id plus that container's OCI annotations, presented

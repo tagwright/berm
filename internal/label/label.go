@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 the berm authors
+// Copyright (C) 2026 techgaud
 
 // Package label is the parsed model of berm's label grammar. It holds the
 // types only. The parser that turns a container's raw labels into a

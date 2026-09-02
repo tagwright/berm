@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 the berm authors
+// Copyright (C) 2026 techgaud
 
 // Package wire is berm's leaf shared-delivery core: the on-socket protocol
 // between the daemon and the one-shot client, the secret Bundle those two
