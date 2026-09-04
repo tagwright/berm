@@ -11,6 +11,13 @@
 .env
 *.local
 
+# Cascade context and charter are internal governance, versioned centrally by the
+# projects-docs system, never committed to this public repo. docs/ is deliberately
+# NOT ignored here: berm is public FOSS and its user and trust docs are public
+# (README links into them, docs/SECURITY.md is the published trust argument).
+/CLAUDE.md
+/CHARTER.md
+
 # Never commit decrypted secrets, an age key, or a live secrets dir
 *.sops.decrypted
 *.key
