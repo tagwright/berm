@@ -1,0 +1,58 @@
+# Self-hosted-runner smoke-proof (tagwright CI runner rollout, task #554 / #571).
+#
+# This runs IN PARALLEL with ci.yml's ubuntu-latest jobs; it does not replace or
+# touch them. It targets the self-hosted tagwright runner whose labels are
+# exactly tagwright,dind,self-hosted, and whose job environment already points
+# DOCKER_HOST at its own isolated privileged dind over TLS (the runner container
+# injects DOCKER_TLS_VERIFY/DOCKER_CERT_PATH, not this file). The load-bearing
+# thing being proven is that a real job is picked up by the runner AND can reach
+# that isolated dind; the Go build/vet/test then proves the toolchain and the
+# public module fetch work on the runner.
+#
+# Runner-runs-as-root dependency: berm's unit tests deliver a secret file and
+# chown it to its declared numeric owner, which needs CAP_CHOWN. This leg uses
+# the plain host setup-go pattern, which is safe ONLY because the self-hosted
+# runner executes jobs as root (uid 0, CAP_CHOWN present), the same reason
+# berm's own ci.yml runs inside a root golang container. A future move to a
+# rootless runner would need to run the build/test steps inside a root
+# container: golang image and split the dind-reach probe into its own host job.
+#
+# Reversible: delete this file to remove the self-hosted leg entirely.
+
+name: CI (self-hosted)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-selfhosted:
+    # Must match the runner's LABELS set exactly (tagwright,dind,self-hosted);
+    # a label the runner does not carry leaves the job Queued forever.
+    runs-on: [self-hosted, tagwright, dind]
+    env:
+      GOPRIVATE: github.com/tagwright/*
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prove the isolated dind is reachable over TLS
+        run: |
+          docker version
+          docker info
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./...
