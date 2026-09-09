@@ -35,6 +35,12 @@ type fakeRuntime struct {
 	containers map[string]runtime.Container
 	events     chan runtime.Event
 	errs       chan error
+	// Fault knobs: when set, the corresponding call returns this error instead
+	// of its normal answer, so a test can prove a runtime fault surfaces rather
+	// than being silently swallowed. A Watch fault is injected through the errs
+	// channel directly, so it needs no knob here.
+	listErr    error
+	inspectErr error
 }
 
 func newFakeRuntime() *fakeRuntime {
@@ -54,6 +60,9 @@ func (r *fakeRuntime) add(c runtime.Container) {
 func (r *fakeRuntime) List(context.Context) ([]runtime.Container, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.listErr != nil {
+		return nil, r.listErr
+	}
 	out := make([]runtime.Container, 0, len(r.containers))
 	for _, c := range r.containers {
 		out = append(out, c)
@@ -64,6 +73,9 @@ func (r *fakeRuntime) List(context.Context) ([]runtime.Container, error) {
 func (r *fakeRuntime) Inspect(_ context.Context, id string) (runtime.Container, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.inspectErr != nil {
+		return runtime.Container{}, r.inspectErr
+	}
 	c, ok := r.containers[id]
 	if !ok {
 		return runtime.Container{}, os.ErrNotExist
