@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tagwright/beacon"
+	"github.com/tagwright/courier"
 )
 
 // runDigest runs the scheduled staleness digest. On each tick it composes the
@@ -72,13 +72,13 @@ func (d *Daemon) SendDigest(ctx context.Context) error {
 // warning (drift is a rotate-me nudge) or error (a sticky secrets-affecting
 // failure is more urgent). The body names containers and sources only. The
 // fields carry machine-readable counts.
-func composeDigest(drift []Drift, sticky []stickyError, now time.Time) beacon.Notification {
-	level := beacon.LevelInfo
+func composeDigest(drift []Drift, sticky []stickyError, now time.Time) courier.Notification {
+	level := courier.LevelInfo
 	if len(drift) > 0 {
-		level = beacon.LevelWarning
+		level = courier.LevelWarning
 	}
 	if len(sticky) > 0 {
-		level = beacon.LevelError
+		level = courier.LevelError
 	}
 
 	var b strings.Builder
@@ -120,7 +120,7 @@ func composeDigest(drift []Drift, sticky []stickyError, now time.Time) beacon.No
 		}
 	}
 
-	return beacon.Notification{
+	return courier.Notification{
 		Title: "berm staleness digest",
 		Body:  b.String(),
 		Level: level,

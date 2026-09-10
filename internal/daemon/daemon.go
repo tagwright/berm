@@ -30,7 +30,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tagwright/beacon"
+	"github.com/tagwright/courier"
 	"github.com/tagwright/core/runtime"
 
 	"github.com/tagwright/berm/internal/alert"
@@ -356,7 +356,7 @@ func (d *Daemon) alertValidation(ctx context.Context, containerID, service strin
 	// error chain on the wire or in the sink body; log it for the operator only.
 	d.log.Error("injection failed", "container", containerID, "err", err.Error())
 	if d.sink != nil {
-		_ = d.sink.Alert(ctx, beacon.LevelError, "berm injection failed",
+		_ = d.sink.Alert(ctx, courier.LevelError, "berm injection failed",
 			"a berm injection failed for a container: see the daemon log",
 			map[string]string{"container": containerID, "service": service})
 	}
@@ -365,11 +365,11 @@ func (d *Daemon) alertValidation(ctx context.Context, containerID, service strin
 
 // validationLevel maps a validation class to an alert severity: the sticky
 // secrets-affecting classes are errors, the rest warnings.
-func validationLevel(le *label.Error) beacon.Level {
+func validationLevel(le *label.Error) courier.Level {
 	if le.Sticky() {
-		return beacon.LevelError
+		return courier.LevelError
 	}
-	return beacon.LevelWarning
+	return courier.LevelWarning
 }
 
 // --- sticky-error store ---

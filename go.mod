@@ -5,8 +5,8 @@ go 1.25.0
 require (
 	github.com/awnumar/memguard v0.23.0
 	github.com/spf13/cobra v1.10.2
-	github.com/tagwright/beacon v0.1.0
 	github.com/tagwright/core v0.2.0
+	github.com/tagwright/courier v0.2.0
 	golang.org/x/sys v0.47.0
 	gopkg.in/yaml.v3 v3.0.1
 )

@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tagwright/beacon"
+	"github.com/tagwright/courier"
 
 	"github.com/tagwright/berm/internal/backend"
 	"github.com/tagwright/berm/internal/label"
@@ -30,7 +30,7 @@ func TestComposeDigestDriftAndSticky(t *testing.T) {
 	n := composeDigest(drift, sticky, now)
 
 	// Sticky present raises the level to error.
-	if n.Level != beacon.LevelError {
+	if n.Level != courier.LevelError {
 		t.Errorf("level = %v, want error", n.Level)
 	}
 	if n.Fields["drift"] != "2" || n.Fields["sticky"] != "1" {
@@ -46,7 +46,7 @@ func TestComposeDigestDriftAndSticky(t *testing.T) {
 
 func TestComposeDigestAllClear(t *testing.T) {
 	n := composeDigest(nil, nil, time.Unix(1735689600, 0).UTC())
-	if n.Level != beacon.LevelInfo {
+	if n.Level != courier.LevelInfo {
 		t.Errorf("all-clear level = %v, want info", n.Level)
 	}
 	if !strings.Contains(n.Body, "no drift") {

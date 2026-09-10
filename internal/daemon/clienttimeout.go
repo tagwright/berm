@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tagwright/beacon"
+	"github.com/tagwright/courier"
 )
 
 // clientTracker enforces client-mode fetch safety. When a client-mode
@@ -109,7 +109,7 @@ func (t *clientTracker) fire(containerID string) {
 	if sink == nil {
 		return
 	}
-	_ = sink.Alert(ctx, beacon.LevelWarning,
+	_ = sink.Alert(ctx, courier.LevelWarning,
 		"berm client fetch timeout",
 		"a client-mode container started but no berm-client fetch arrived within the timeout: check that its entrypoint runs the berm-client wrapper",
 		map[string]string{

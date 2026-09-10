@@ -21,7 +21,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/tagwright/beacon"
+	"github.com/tagwright/courier"
 
 	"github.com/tagwright/berm/internal/alert"
 	"github.com/tagwright/berm/internal/backend"
@@ -127,8 +127,8 @@ func runDaemon(cmd *cobra.Command, _ []string) error {
 // diagnostics through beacon's always-available log channel into the daemon
 // logger, so alerts are never silently dropped. beacon carries no secret value.
 func buildSink() (alert.Sink, error) {
-	b, err := beacon.New(beacon.Config{
-		Channels: []beacon.ChannelConfig{{Type: "log", MinLevel: beacon.LevelInfo}},
+	b, err := courier.New(courier.Config{
+		Channels: []courier.ChannelConfig{{Type: "log", MinLevel: courier.LevelInfo}},
 	}, nil)
 	if err != nil {
 		return nil, err

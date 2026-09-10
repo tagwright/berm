@@ -15,7 +15,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/tagwright/beacon"
+	"github.com/tagwright/courier"
 	"github.com/tagwright/core/runtime"
 
 	"github.com/tagwright/berm/internal/backend"
@@ -102,7 +102,7 @@ var _ runtime.Runtime = (*fakeRuntime)(nil)
 
 // captured is one alert the fake sink recorded.
 type captured struct {
-	Level  beacon.Level
+	Level  courier.Level
 	Title  string
 	Body   string
 	Fields map[string]string
@@ -115,7 +115,7 @@ type fakeSink struct {
 	alerts []captured
 }
 
-func (s *fakeSink) Alert(_ context.Context, level beacon.Level, title, body string, fields map[string]string) error {
+func (s *fakeSink) Alert(_ context.Context, level courier.Level, title, body string, fields map[string]string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cp := map[string]string{}
