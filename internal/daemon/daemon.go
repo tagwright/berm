@@ -30,8 +30,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tagwright/courier"
 	"github.com/tagwright/core/runtime"
+	"github.com/tagwright/courier"
 
 	"github.com/tagwright/berm/internal/alert"
 	"github.com/tagwright/berm/internal/config"
@@ -127,6 +127,11 @@ type Config struct {
 	// tests that drive the loop deterministically).
 	ReconcileInterval time.Duration
 
+	// HeartbeatPath is where the reconcile loop writes its liveness heartbeat.
+	// Empty uses DefaultHeartbeatPath. A test points this at its own tmpfs file to
+	// observe the beat.
+	HeartbeatPath string
+
 	// DigestEnabled turns the scheduled stale digest on. When false no digest is
 	// scheduled. Defaults from Berm.Globals.StaleDigest when Berm is set.
 	DigestEnabled bool
@@ -159,6 +164,7 @@ type Daemon struct {
 	sockPath       string
 	volRoot        string
 	reconcileEvery time.Duration
+	heartbeatPath  string
 	log            *slog.Logger
 	now            func() time.Time
 
@@ -218,6 +224,10 @@ func New(cfg Config) (*Daemon, error) {
 	if reconcileEvery == 0 {
 		reconcileEvery = DefaultReconcileInterval
 	}
+	heartbeatPath := cfg.HeartbeatPath
+	if heartbeatPath == "" {
+		heartbeatPath = DefaultHeartbeatPath
+	}
 
 	ledger, err := LoadLedger(ledgerPath)
 	if err != nil {
@@ -237,6 +247,7 @@ func New(cfg Config) (*Daemon, error) {
 		sockPath:       sockPath,
 		volRoot:        volRoot,
 		reconcileEvery: reconcileEvery,
+		heartbeatPath:  heartbeatPath,
 		log:            log,
 		now:            now,
 		sticky:         newStickyStore(),

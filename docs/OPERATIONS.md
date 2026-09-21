@@ -263,7 +263,66 @@ only. None decrypts a secret or prints a value. Each takes `--config`
   comes from `--file`, else the `berm.yml` source entry, else the convention
   `<BERM_SOURCES_ROOT>/<service>.sops.env`. The format comes from `--format`, else
   `berm.yml`, else the file extension.
+- **`berm healthz`** is the liveness probe, and the one command here that is not
+  read-only reporting. It reads the daemon's reconcile heartbeat and exits 0 when
+  it is fresh, nonzero when it is stale or missing. It takes `--heartbeat`
+  (default `/run/berm-health/heartbeat`) and `--stale-after` (default `6s`, three
+  reconcile intervals). It opens no socket, loads no config, and decrypts
+  nothing, so like the rest it can never surface a value. See the next section.
 - **`berm version`** prints the build version.
+
+## Liveness and health checks
+
+`berm status` answers from the on-disk ledger and the runtime listing. Neither
+consults the daemon's own reconcile goroutine, so a daemon whose reconcile loop
+has hung while its process lives on would still let `status` list containers and
+report them healthy. A false liveness signal is worse than none, so the daemon
+carries a separate heartbeat that proves the reconcile loop itself is running.
+
+**The heartbeat.** The reconcile loop writes a timestamp to
+`/run/berm-health/heartbeat` after every pass (the reconcile interval is 2s by
+default). The write only happens once a pass completes, so the timestamp
+advances only while the reconcile goroutine is actually running. A pass that
+hangs (a wedged runtime socket, say) never reaches the write, so the heartbeat
+goes stale even though the process is still alive. The heartbeat holds a
+timestamp and nothing else. It is not a secret, so it lives on its own tmpfs
+mount kept well away from the socket, the age key, and any shared volume.
+
+**The probe.** `berm healthz` reads that heartbeat and exits 0 only when it is
+fresh (younger than `--stale-after`, three reconcile intervals by default). A
+stale beat means the reconcile loop is not progressing, and a missing beat means
+the daemon is down or never started reconciling. Both exit nonzero. Because the
+daemon image is distroless and carries no shell, the healthcheck command must be
+the berm binary itself, which is exactly what `healthz` is for.
+
+**Wiring it into a deployment (the gated deploy step).** Add a writable tmpfs
+mount for the heartbeat and a healthcheck that runs `berm healthz` to the daemon
+service. The tmpfs mount is required because the daemon runs with a read-only
+rootfs, and it is a dedicated top-level path so it never collides with the socket
+volume, the age-key mount, or a volume-mode shared volume in any of the three
+topologies:
+
+```yaml
+  berm:
+    image: ghcr.io/tagwright/berm:00.01.00b1
+    # ...existing daemon config (pid, network_mode, read_only, volumes)...
+    tmpfs:
+      - /tmp
+      - /run/berm-health
+    healthcheck:
+      test: ["CMD", "berm", "healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+```
+
+`start_period` covers the daemon's first reconcile pass, so a slow start is not
+counted as unhealthy. None of the security posture changes: the added tmpfs
+mount is the only new surface, and `network_mode: none`, `read_only: true`,
+`pid: host`, and the capability drops all stay as they are. Publishing the image
+and recreating the running daemon with this stanza is a separately gated deploy
+step.
 
 ## Environment globals
 

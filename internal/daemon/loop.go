@@ -87,6 +87,11 @@ func (d *Daemon) runReconcile(ctx context.Context) {
 		return
 	}
 	d.reconcileVolumes(ctx)
+	// Beat only after a pass completes, so the heartbeat advances solely while the
+	// reconcile goroutine is genuinely running. A pass that hangs (a wedged
+	// runtime socket, say) never reaches this line, so the heartbeat goes stale
+	// and `berm healthz` reports the daemon unhealthy though its PID lives on.
+	d.beat()
 	t := time.NewTicker(d.reconcileEvery)
 	defer t.Stop()
 	for {
@@ -95,6 +100,7 @@ func (d *Daemon) runReconcile(ctx context.Context) {
 			return
 		case <-t.C:
 			d.reconcileVolumes(ctx)
+			d.beat()
 		}
 	}
 }

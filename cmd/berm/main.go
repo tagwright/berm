@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -53,6 +54,7 @@ func newRootCmd() *cobra.Command {
 
 	root.AddCommand(
 		newDaemonCmd(),
+		newHealthzCmd(),
 		newStatusCmd(),
 		newStaleCmd(),
 		newSuggestCmd(),
@@ -60,6 +62,32 @@ func newRootCmd() *cobra.Command {
 		newVersionCmd(),
 	)
 	return root
+}
+
+func newHealthzCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "healthz",
+		Short: "Liveness probe: exit 0 only if the daemon's reconcile loop is beating",
+		Long: "Read the daemon's reconcile heartbeat and exit 0 when it is fresh, " +
+			"nonzero when it is stale or missing. It is the container healthcheck for " +
+			"the distroless daemon image (which has no shell), and it detects a " +
+			"hung-but-running daemon that a bare process check would call healthy. " +
+			"It reads a timestamp file only: no socket, no config, no decrypt, no secret.",
+		Args: cobra.NoArgs,
+		RunE: runHealthz,
+	}
+	cmd.Flags().String("heartbeat", daemon.DefaultHeartbeatPath, "path to the daemon liveness heartbeat")
+	cmd.Flags().Duration("stale-after", daemon.DefaultHeartbeatStaleAfter, "max heartbeat age before the daemon is reported unhealthy")
+	return cmd
+}
+
+// runHealthz reads the reconcile heartbeat and reports liveness. It returns an
+// error (which becomes berm's nonzero exit) when the heartbeat is stale or
+// missing, so it is usable directly as a compose healthcheck CMD.
+func runHealthz(cmd *cobra.Command, _ []string) error {
+	path, _ := cmd.Flags().GetString("heartbeat")
+	staleAfter, _ := cmd.Flags().GetDuration("stale-after")
+	return cli.Healthz(os.Stdout, path, staleAfter, time.Now())
 }
 
 func newDaemonCmd() *cobra.Command {
