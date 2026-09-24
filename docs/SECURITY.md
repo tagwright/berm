@@ -194,3 +194,13 @@ Stated honestly, so nobody deploys expecting a guarantee that is not there.
   the DNS-over-HTTPS and direct-IP residuals that qualify an FQDN egress policy are
   irrelevant to it. It is named only to be explicit that it was considered and does
   not apply. The app-specific-hashing edge above is the one that does.
+
+## Reporting a vulnerability
+
+For a secrets tool a quiet report path matters, so there is one. Report a
+suspected vulnerability through GitHub's private vulnerability reporting on this
+repository: open the Security tab and choose "Report a vulnerability". The
+report stays private to the maintainers while it is triaged.
+
+Disclosure is coordinated. A fix is prepared and released before the details go
+public, and you are kept in the loop on the timing.
