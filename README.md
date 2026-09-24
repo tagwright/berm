@@ -6,7 +6,8 @@ the secrets it declared by label. You name the secrets in the compose file, next
 to the service that needs them, and the values resolve at runtime. A label
 carries a secret's name, never its value.
 
-Berm does not reimplement crypto. SOPS and age do the decryption. Berm owns
+Berm does not reimplement crypto. [SOPS](https://github.com/getsops/sops) and
+[age](https://github.com/FiloSottile/age) do the decryption. Berm owns
 discovery, the peer-authenticated fetch, and delivery, so a container obtains
 only its own declared secrets, never the age key and never another container's.
 It replaces the per-container `sops -d` that scatters plaintext and the age key
