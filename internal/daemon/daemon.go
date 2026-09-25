@@ -263,11 +263,32 @@ func New(cfg Config) (*Daemon, error) {
 // keeps, and so a standalone process can load it from disk with LoadLedger.
 func (d *Daemon) Ledger() *Ledger { return d.ledger }
 
-// Run starts the socket server, the control loop, and (when enabled) the digest
+// Run is berm's daemon production entrypoint and the Level 2 wiring-test seam
+// (task #549). It builds the Daemon from the injected Config and drives it until
+// ctx is cancelled. cmd/berm wraps it in a few lines (load config, select the
+// runtime, build the opener and sink, then call Run); a wiring test drives this
+// same Run against the shared core/runtime/runtimetest fake with a fault
+// injected, so the real watch, reconcile, and dispatch path is exercised rather
+// than a hand-rolled double.
+//
+// Config is berm's dependency-injection seam: it carries the injected runtime,
+// the delivery opener (the backend-exec), the beacon sink (the notifier), and
+// the clock, which is exactly the collaborator set the Testing Standard's
+// "run(ctx, Deps)" names. berm reuses Config as that Deps rather than declaring
+// a parallel struct, so the injected surface has one source of truth. The caller
+// that built the runtime owns closing it; Run does not.
+func Run(ctx context.Context, cfg Config) error {
+	d, err := New(cfg)
+	if err != nil {
+		return err
+	}
+	return d.run(ctx)
+}
+
+// run starts the socket server, the control loop, and (when enabled) the digest
 // scheduler, then blocks until ctx is cancelled, at which point it shuts every
-// piece down cleanly and returns. It is the daemon's public entrypoint: cmd/berm
-// wires SIGINT/SIGTERM to the ctx it passes here.
-func (d *Daemon) Run(ctx context.Context) error {
+// piece down cleanly and returns. It is the loop driver behind the Run seam.
+func (d *Daemon) run(ctx context.Context) error {
 	if err := d.server.listen(d.sockPath); err != nil {
 		return err
 	}

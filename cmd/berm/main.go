@@ -133,7 +133,13 @@ func runDaemon(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	d, err := daemon.New(daemon.Config{
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	// Hand the injected collaborators to the daemon seam (daemon.Run), the same
+	// entrypoint the wiring tests drive with a fake runtime and injected faults.
+	// Signal handling stays here in the caller; the seam only reacts to ctx.
+	return daemon.Run(ctx, daemon.Config{
 		Runtime:    rt,
 		Berm:       cfg,
 		Opener:     opener,
@@ -141,13 +147,6 @@ func runDaemon(cmd *cobra.Command, _ []string) error {
 		SocketPath: sockFlag,
 		Logger:     log,
 	})
-	if err != nil {
-		return err
-	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-	return d.Run(ctx)
 }
 
 // buildSink builds the beacon-backed alert sink. Until the operator's full
