@@ -36,7 +36,7 @@ func TestReconcilePopulatesCreatedButNotStartedVolumeContainer(t *testing.T) {
 	rt := newFakeRuntime()
 	// A CREATED, never-started volume-mode container: no start event is ever fed
 	// to the loop, mirroring the compose app gated behind the manifest waiter.
-	rt.add(runtime.Container{
+	addContainer(rt, runtime.Container{
 		ID:      "cid-webapp",
 		Name:    "/webapp",
 		Service: "webapp",

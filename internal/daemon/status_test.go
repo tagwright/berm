@@ -24,7 +24,7 @@ func TestStatusReportsEnabledContainers(t *testing.T) {
 
 	rt := newFakeRuntime()
 	// A berm-enabled client container.
-	rt.add(runtime.Container{
+	addContainer(rt, runtime.Container{
 		ID: "cid-webapp", Name: "/webapp", Service: "webapp",
 		Labels: map[string]string{
 			"berm.enable":           "true",
@@ -33,7 +33,7 @@ func TestStatusReportsEnabledContainers(t *testing.T) {
 		},
 	})
 	// A non-berm container: excluded from the report.
-	rt.add(runtime.Container{ID: "cid-plain", Name: "/plain", Service: "plain"})
+	addContainer(rt, runtime.Container{ID: "cid-plain", Name: "/plain", Service: "plain"})
 
 	l := NewLedger(filepath.Join(t.TempDir(), "ledger.json"))
 	recordOnePlan(t, l, opener, "cid-webapp", "webapp", "webapp", "DB_PASSWORD")
@@ -66,7 +66,7 @@ func TestStatusReportsValidationError(t *testing.T) {
 		},
 	)
 	rt := newFakeRuntime()
-	rt.add(runtime.Container{
+	addContainer(rt, runtime.Container{
 		ID: "cid-webapp", Name: "/webapp", Service: "webapp",
 		Labels: map[string]string{
 			"berm.enable":      "true",

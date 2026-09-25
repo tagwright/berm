@@ -27,7 +27,7 @@ func TestControlLoopVolumePushAndLedger(t *testing.T) {
 	)
 
 	rt := newFakeRuntime()
-	rt.add(runtime.Container{
+	addContainer(rt, runtime.Container{
 		ID:      "cid-webapp",
 		Name:    "/webapp",
 		Service: "webapp",
@@ -98,7 +98,7 @@ func TestControlLoopClientModeExpectsFetch(t *testing.T) {
 		},
 	)
 	rt := newFakeRuntime()
-	rt.add(runtime.Container{
+	addContainer(rt, runtime.Container{
 		ID:      "cid-webapp",
 		Name:    "/webapp",
 		Service: "webapp",

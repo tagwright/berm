@@ -15,8 +15,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/tagwright/courier"
 	"github.com/tagwright/core/runtime"
+	"github.com/tagwright/core/runtime/runtimetest"
+	"github.com/tagwright/courier"
 
 	"github.com/tagwright/berm/internal/backend"
 	"github.com/tagwright/berm/internal/config"
@@ -26,77 +27,23 @@ import (
 
 // --- fake runtime -----------------------------------------------------------
 
-// fakeRuntime is a minimal runtime.Runtime for the daemon tests. It answers
-// List and Inspect from a registered container set and streams synthetic
-// lifecycle events through a channel the test feeds. The lifecycle-control
-// methods are unused by these tests and return nil or ErrNotImplemented.
-type fakeRuntime struct {
-	mu         sync.Mutex
-	containers map[string]runtime.Container
-	events     chan runtime.Event
-	errs       chan error
-	// Fault knobs: when set, the corresponding call returns this error instead
-	// of its normal answer, so a test can prove a runtime fault surfaces rather
-	// than being silently swallowed. A Watch fault is injected through the errs
-	// channel directly, so it needs no knob here.
-	listErr    error
-	inspectErr error
+// newFakeRuntime returns the suite's canonical fake runtime,
+// core/runtime/runtimetest.Runtime. It replaces berm's former hand-rolled
+// fakeRuntime (task #549): the shared fake carries a per-operation fault knob
+// (rt.Faults.List / .Inspect / .Watch and the rest) and a scripted event stream
+// (rt.Emit / rt.Fail / rt.CloseWatch), which is what the Level 2 wiring tests use
+// to prove a runtime fault SURFACES rather than being silently swallowed. Seed a
+// test's containers with addContainer.
+func newFakeRuntime() *runtimetest.Runtime {
+	return runtimetest.New()
 }
 
-func newFakeRuntime() *fakeRuntime {
-	return &fakeRuntime{
-		containers: map[string]runtime.Container{},
-		events:     make(chan runtime.Event, 16),
-		errs:       make(chan error, 1),
-	}
+// addContainer registers c with the shared fake, so List returns it and Inspect
+// matches it by ID or by name. It is the shared fake's plain-field equivalent of
+// the former fakeRuntime.add.
+func addContainer(rt *runtimetest.Runtime, c runtime.Container) {
+	rt.Containers = append(rt.Containers, c)
 }
-
-func (r *fakeRuntime) add(c runtime.Container) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.containers[c.ID] = c
-}
-
-func (r *fakeRuntime) List(context.Context) ([]runtime.Container, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.listErr != nil {
-		return nil, r.listErr
-	}
-	out := make([]runtime.Container, 0, len(r.containers))
-	for _, c := range r.containers {
-		out = append(out, c)
-	}
-	return out, nil
-}
-
-func (r *fakeRuntime) Inspect(_ context.Context, id string) (runtime.Container, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.inspectErr != nil {
-		return runtime.Container{}, r.inspectErr
-	}
-	c, ok := r.containers[id]
-	if !ok {
-		return runtime.Container{}, os.ErrNotExist
-	}
-	return c, nil
-}
-
-func (r *fakeRuntime) Watch(context.Context) (<-chan runtime.Event, <-chan error) {
-	return r.events, r.errs
-}
-
-func (r *fakeRuntime) Exec(context.Context, string, runtime.ExecSpec) (*runtime.ExecHandle, error) {
-	return nil, runtime.ErrNotImplemented
-}
-func (r *fakeRuntime) Stop(context.Context, string, int) error    { return nil }
-func (r *fakeRuntime) Start(context.Context, string) error        { return nil }
-func (r *fakeRuntime) Kill(context.Context, string, string) error { return nil }
-func (r *fakeRuntime) Restart(context.Context, string) error      { return nil }
-func (r *fakeRuntime) Close() error                               { return nil }
-
-var _ runtime.Runtime = (*fakeRuntime)(nil)
 
 // --- fake sink --------------------------------------------------------------
 
