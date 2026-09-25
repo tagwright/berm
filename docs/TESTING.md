@@ -18,6 +18,7 @@ is unproven, honestly.
 | No-store / no-log / no-plaintext-on-disk, age key never in an app | proven live | both harnesses |
 | Every validation failure path (skip-and-alert) | proven live | Docker harness |
 | Rotation staleness (`berm stale` drift) | proven live | Docker harness |
+| Runtime fault surfacing (Watch / List / Inspect) via the run seam | proven (L2, fault injection) | `internal/daemon/runtime_faults_test.go` |
 | Rootless Podman, daemon + hook end to end | unproven | needs a real rootless Podman host |
 | cgroup v1 peer-auth | compile-only (unit fixtures) | live proof is cgroup v2 |
 
@@ -38,6 +39,42 @@ exercises the true SOPS/age path on a developer box with the pinned tools.
 
 The peerauth SO_PEERCRED gates are proven live and documented in
 [EMPIRICAL.md](EMPIRICAL.md).
+
+## Level 2 wiring: the run seam and runtime fault injection
+
+The daemon is driven through one production entrypoint, the `daemon.Run(ctx,
+Config)` seam. `cmd/berm` wraps it in a handful of lines (load config, select the
+runtime, build the opener and the sink, then call `Run`), and the wiring tests
+drive that same `Run` with the shared `core/runtime/runtimetest` fake in place of
+a live socket. berm's `daemon.Config` is that seam's injected dependency set: it
+carries the runtime, the delivery opener (the backend-exec), the beacon sink (the
+notifier), and the clock, so main and the tests exercise the same wired path
+rather than a hand-rolled double. This replaced berm's former per-package
+`fakeRuntime` copy with the one canonical suite fake (task #549).
+
+The fake's value over a happy-path double is its per-operation fault knob, and
+the wiring tests use it to prove every runtime touch point the daemon relies on
+SURFACES a fault rather than swallowing it. All are in
+`internal/daemon/runtime_faults_test.go`:
+
+- `TestWatchOnce_RuntimeWatchErrorSurfaces`, `TestReconcileVolumes_ListErrorSurfaces`,
+  and `TestHandleStart_InspectErrorSurfaces` inject a Watch, List, or Inspect
+  fault at the touch-point method and assert it is logged, never dropped. They
+  dereference only the runtime and the logger, so they run everywhere with no
+  sops or age on PATH.
+- `TestRun_WatchFaultSurfacesEndToEnd`, `TestRun_ReconcileListFaultSurfacesEndToEnd`,
+  and `TestRun_StartEventInspectFaultSurfacesEndToEnd` inject the same three
+  faults through the real `Run` entrypoint end to end. Each asserts the fault
+  surfaces in the running daemon and that the daemon stays alive and shuts down
+  cleanly. The Inspect case additionally asserts the daemon does NOT push to a
+  container it could not identify (no injection, no alert), the no-silent-partial-
+  delivery guarantee.
+
+Status: **proven** (Level 2, in `go test ./...`, no external tools). These lock
+in berm's resilient log-and-continue contract for a runtime blip (#604): the
+watch reconnects, the reconcile retries next tick, and a start whose inspect
+fails is skipped, none of them silently. A mutation that makes any of these three
+paths swallow its fault turns the matching test red.
 
 ## Integration harness (Docker path)
 
