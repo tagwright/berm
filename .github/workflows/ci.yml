@@ -8,7 +8,7 @@ on:
     branches: [main]
 
 jobs:
-  # Build, vet, and the unit tests. The job runs inside the golang:1.25 image as
+  # Build, vet, and the unit tests. The job runs inside the golang:1.25.14 image as
   # root, which is the environment berm actually runs in: delivering a secret
   # chowns the file to its declared numeric owner (a core security behavior), and
   # chown to another uid needs CAP_CHOWN, which an unprivileged runner lacks. Root
@@ -17,7 +17,7 @@ jobs:
   # through the public proxy. go.sum still verifies them.
   build:
     runs-on: ubuntu-latest
-    container: golang:1.25
+    container: golang:1.25.14
     env:
       GOPRIVATE: github.com/tagwright/*
     steps:
@@ -47,7 +47,7 @@ jobs:
   # by go test, so it deliberately does not run here.
   integration:
     runs-on: ubuntu-latest
-    container: golang:1.25
+    container: golang:1.25.14
     env:
       GOPRIVATE: github.com/tagwright/*
       SOPS_VERSION: 3.9.4

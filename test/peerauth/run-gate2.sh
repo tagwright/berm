@@ -8,7 +8,7 @@
 # operates only on objects it creates and never touches any running stack.
 #
 # Run this on a host with a live Docker socket. It builds a static harness
-# binary in a golang:1.25 container, so no host Go toolchain is needed.
+# binary in a golang:1.25.14 container, so no host Go toolchain is needed.
 #
 # The shared directory must be a HOST path (bind mounts into the sibling
 # containers resolve on the host). This script uses a mktemp dir, which is
@@ -40,7 +40,7 @@ docker run --rm \
   -v "$SHARED":/out \
   -e GOPRIVATE='github.com/tagwright/*' -e GOFLAGS=-buildvcs=false \
   -e CGO_ENABLED=0 \
-  golang:1.25 sh -c "go build -o /out/gate2 ./test/peerauth/gate2 && ls -l /out/gate2" || exit 1
+  golang:1.25.14 sh -c "go build -o /out/gate2 ./test/peerauth/gate2 && ls -l /out/gate2" || exit 1
 
 docker pull -q "$IMG" >/dev/null 2>&1 || true
 

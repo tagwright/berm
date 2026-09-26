@@ -2,6 +2,8 @@ module github.com/tagwright/berm
 
 go 1.25.0
 
+toolchain go1.25.14
+
 require (
 	github.com/awnumar/memguard v0.23.0
 	github.com/spf13/cobra v1.10.2

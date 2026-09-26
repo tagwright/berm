@@ -138,17 +138,17 @@ setup_build() {
 
   rm -rf "$SRC" "$KEYS" "$OUT"; mkdir -p "$SRC" "$KEYS" "$OUT"
 
-  log "SETUP: build probe + age-keygen (golang:1.25, no host Go)"
+  log "SETUP: build probe + age-keygen (golang:1.25.14, no host Go)"
   docker volume create "$GOCACHE_VOL" >/dev/null 2>&1 || true
   docker run --rm \
     -v "$ITEST/tools/probe":/w -w /w \
     -v "$OUT":/out -v "$GOCACHE_VOL":/go \
     -e CGO_ENABLED=0 -e GOFLAGS=-buildvcs=false \
-    "golang:1.25" go build -o /out/probe . || { echo "probe build failed"; exit 1; }
+    "golang:1.25.14" go build -o /out/probe . || { echo "probe build failed"; exit 1; }
   docker run --rm \
     -v "$OUT":/out -v "$GOCACHE_VOL":/go \
     -e CGO_ENABLED=0 -e GOBIN=/out -e GOFLAGS=-buildvcs=false \
-    "golang:1.25" go install filippo.io/age/cmd/age-keygen@v1.2.1 \
+    "golang:1.25.14" go install filippo.io/age/cmd/age-keygen@v1.2.1 \
     || { echo "age-keygen build failed"; exit 1; }
   [ -x "$OUT/probe" ] && [ -x "$OUT/age-keygen" ] || { echo "helpers missing"; exit 1; }
 

@@ -17,7 +17,7 @@
 # `replace` would fail: a stale replace pointing at ../core or ../beacon breaks
 # the build here.
 
-FROM golang:1.25 AS build
+FROM golang:1.25.14 AS build
 
 ENV GOPRIVATE=github.com/tagwright/*
 

@@ -13,7 +13,7 @@
 # Requirements: a live Docker socket, host `sops` (used only to ENCRYPT the
 # throwaway fixture sources; the daemon does all decryption itself), and network
 # egress once to build a static age-keygen and pull base images. There is no host
-# Go toolchain: all Go builds run in a golang:1.25 container.
+# Go toolchain: all Go builds run in a golang:1.25.14 container.
 #
 # The berm daemon image must be built first (the harness builds it if absent):
 #   docker build -t berm-itest-img:latest <repo-root>
@@ -123,19 +123,19 @@ setup() {
 
   rm -rf "$SRC" "$KEYS" "$OUT"; mkdir -p "$SRC" "$KEYS" "$OUT"
 
-  log "SETUP: build probe + age-keygen (golang:1.25, no host Go)"
+  log "SETUP: build probe + age-keygen (golang:1.25.14, no host Go)"
   docker volume create "$GOCACHE_VOL" >/dev/null
   # probe: stdlib-only, static, offline.
   docker run --rm \
     -v "$ITEST/tools/probe":/w -w /w \
     -v "$OUT":/out -v "$GOCACHE_VOL":/go \
     -e CGO_ENABLED=0 -e GOFLAGS=-buildvcs=false \
-    "golang:1.25" go build -o /out/probe . || { echo "probe build failed"; exit 1; }
+    "golang:1.25.14" go build -o /out/probe . || { echo "probe build failed"; exit 1; }
   # age-keygen: to generate a real age identity for the fixtures.
   docker run --rm \
     -v "$OUT":/out -v "$GOCACHE_VOL":/go \
     -e CGO_ENABLED=0 -e GOBIN=/out -e GOFLAGS=-buildvcs=false \
-    "golang:1.25" go install filippo.io/age/cmd/age-keygen@v1.2.1 \
+    "golang:1.25.14" go install filippo.io/age/cmd/age-keygen@v1.2.1 \
     || { echo "age-keygen build failed"; exit 1; }
   [ -x "$OUT/probe" ] && [ -x "$OUT/age-keygen" ] || { echo "helpers missing"; exit 1; }
 
